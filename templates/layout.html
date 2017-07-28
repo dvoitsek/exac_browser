@@ -41,7 +41,7 @@
             var bestPictures = new Bloodhound({
               datumTokenizer: Bloodhound.tokenizers.obj.whitespace('value'),
               queryTokenizer: Bloodhound.tokenizers.whitespace,
-              remote: '/autocomplete/%QUERY'
+              remote: 'autocomplete/%QUERY'
             });
 
             bestPictures.initialize();
@@ -57,7 +57,7 @@
                 }
             );
             $('.awesomebar').bind('typeahead:selected', function(obj, datum) {
-                window.location.href = '/awesome?query=' + datum.value;
+                window.location.href = '/exac/awesome?query=' + datum.value;
             });
         });
     </script>
@@ -72,9 +72,9 @@
                 <span class="icon-bar"></span>
                 <span class="icon-bar"></span>
             </button>
-            <a class="navbar-brand" href="/" style="color: white; font-weight: bold; float: left; font-size: 15px;">ExAC Browser Beta</a>
+            <a class="navbar-brand" href="/exac" style="color: white; font-weight: bold; float: left; font-size: 15px;">ExAC Browser Beta</a>
             <div class="col-xs-5" id="navbar_form_container">
-                <form action="/awesome" class="navbar-form" role="search">
+                <form action="awesome" class="navbar-form" role="search">
                     <div class="form-group" id="navbar-awesomebar">
                         <input type="submit" style="display: none;"/>
                         <input id="navbar-searchbox-input" name="query" class="form-control awesomebar" type="text" placeholder="Gene, transcript, variant, or region"/>
@@ -86,12 +86,12 @@
         <!-- Collect the nav links, forms, and other content for toggling -->
         <div class="collapse navbar-collapse" id="navbar-collapse">
             <ul class="nav navbar-nav navbar-right">
-                <li><a href="/about" style="color: white; font-weight: bold;">About</a></li>
-                <li><a href="/downloads" style="color: white; font-weight: bold;">Downloads</a></li>
-                <li><a href="/terms" style="color: white; font-weight: bold;">Terms</a></li>
-                <li><a href="/contact" style="color: white; font-weight: bold;">Contact</a></li>
+                <li><a href="/exac/about" style="color: white; font-weight: bold;">About</a></li>
+                <li><a href="/exac/downloads" style="color: white; font-weight: bold;">Downloads</a></li>
+                <li><a href="/exac/terms" style="color: white; font-weight: bold;">Terms</a></li>
+                <li><a href="/exac/contact" style="color: white; font-weight: bold;">Contact</a></li>
                 <li><a href="https://recruiting.adp.com/srccar/RTI.home?c=1131007&d=External&r=5000161384706" style="color: white; font-weight: bold;">Jobs</a></li>
-                <li><a href="/faq" style="color: white; font-weight: bold;">FAQ</a></li>
+                <li><a href="/exac/faq" style="color: white; font-weight: bold;">FAQ</a></li>
             </ul>
         </div><!-- /.navbar-collapse -->
     </div><!-- /.container-fluid -->
@@ -109,7 +109,7 @@
 {#        <span>#}
 {#            <a href="/" style="color: white; font-weight: bold; float: left;">ExAC Browser (Beta)</a>#}
 {#        </span>#}
-{#        <form action="/awesome" class="navbar-form navbar-left" role="search">#}
+{#        <form action="awesome" class="navbar-form navbar-left" role="search">#}
 {#            <div class="form-group">#}
 {#                <input type="submit" style="display: none;"/>#}
 {#                <input id="navbar-searchbox-input" name="query" class="form-control" type="text" placeholder="Gene, transcript, variant, or region"/>#}

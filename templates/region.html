@@ -30,7 +30,7 @@
                     <span class="label label-danger">Warning:</span> Your region is too large. Please submit a region of at most 100 kb.
                 </p>
                 <p>
-                    If you require larger regions, please see our <a href="/downloads">Downloads</a> page for raw data.
+                    If you require larger regions, please see our <a href="/exac/downloads">Downloads</a> page for raw data.
                 </p>
             {% elif stop < start %}
                 <p>
@@ -48,7 +48,7 @@
             <div class="section_header">Genes</div>
             <ul>
                 {% for gene in genes_in_region %}
-                    <li><a href="/gene/{{ gene.gene_id }}">{{ gene.gene_id }}</a></li>
+                    <li><a href="/exac/gene/{{ gene.gene_id }}">{{ gene.gene_id }}</a></li>
                 {% endfor %}
             </ul>
             <br/>

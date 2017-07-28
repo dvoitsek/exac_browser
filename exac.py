@@ -12,13 +12,17 @@ import sys
 from utils import *
 
 from flask import Flask, request, session, g, redirect, url_for, abort, render_template, flash, jsonify, send_from_directory
-from flask.ext.compress import Compress
-from flask.ext.runner import Runner
+# from flask.ext.compress import Compress
+from flask_compress import Compress
+# from flask.ext.runner import Runner
+from flask_runner import Runner
 from flask_errormail import mail_on_500
 
 from flask import Response
 from collections import defaultdict, OrderedDict
 from werkzeug.contrib.cache import SimpleCache
+from werkzeug.serving import run_simple
+from werkzeug.wsgi import DispatcherMiddleware
 
 from multiprocessing import Process
 import glob
@@ -37,9 +41,10 @@ app = Flask(__name__)
 mail_on_500(app, ADMINISTRATORS)
 Compress(app)
 app.config['COMPRESS_DEBUG'] = True
+app.config['APPLICATION_ROOT'] = '/exac'
 cache = SimpleCache()
 
-EXAC_FILES_DIRECTORY = '../exac_data/'
+EXAC_FILES_DIRECTORY = '/home/istrian/tests/exac/exac_data'
 REGION_LIMIT = 1E5
 EXON_PADDING = 50
 # Load default config and override config from an environment variable
@@ -49,7 +54,7 @@ app.config.update(dict(
     DB_NAME='exac', 
     DEBUG=True,
     SECRET_KEY='development key',
-    LOAD_DB_PARALLEL_PROCESSES = 4,  # contigs assigned to threads, so good to make this a factor of 24 (eg. 2,3,4,6,8)
+    LOAD_DB_PARALLEL_PROCESSES = 1,  # contigs assigned to threads, so good to make this a factor of 24 (eg. 2,3,4,6,8)
     SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'ExAC*.vcf.gz')),
     GENCODE_GTF=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'gencode.gtf.gz'),
     CANONICAL_TRANSCRIPT_FILE=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'canonical_transcripts.txt.gz'),
@@ -128,6 +133,8 @@ def load_base_coverage():
     db = get_db()
     db.base_coverage.drop()
     print("Dropped db.base_coverage")
+    db.create_collection('base_coverage', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+
     # load coverage first; variant info will depend on coverage
     db.base_coverage.ensure_index('xpos')
 
@@ -155,6 +162,7 @@ def load_variants_file():
     db = get_db()
     db.variants.drop()
     print("Dropped db.variants")
+    db.create_collection('variants', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
 
     # grab variants from sites VCF
     db.variants.ensure_index('xpos')
@@ -186,6 +194,9 @@ def load_constraint_information():
 
     db.constraint.drop()
     print 'Dropped db.constraint.'
+
+    db.create_collection('constraint', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+
 
     start_time = time.time()
 
@@ -223,6 +234,10 @@ def load_gene_models():
     db.transcripts.drop()
     db.exons.drop()
     print 'Dropped db.genes, db.transcripts, and db.exons.'
+    db.create_collection('genes', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+    db.create_collection('transcripts', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+    db.create_collection('exons', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+
 
     start_time = time.time()
 
@@ -304,6 +319,8 @@ def load_cnv_models():
     
     db.cnvs.drop()
     print 'Dropped db.cnvs.'
+    db.create_collection('cnvs', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+
 
     start_time = time.time()
     with open(app.config['CNV_FILE']) as cnv_txt_file:
@@ -318,6 +335,8 @@ def drop_cnv_genes():
     db = get_db()
     start_time = time.time()
     db.cnvgenes.drop()
+    db.create_collection('cnvgenes', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+
 
 def load_cnv_genes():
     db = get_db()
@@ -347,6 +366,7 @@ def load_dbsnp_file():
                 db.dbsnp.insert((snp for snp in get_snp_from_dbsnp_file(f)), w=0)
 
     db.dbsnp.drop()
+    db.create_collection('dbsnp', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
     db.dbsnp.ensure_index('rsid')
     db.dbsnp.ensure_index('xpos')
     start_time = time.time()
@@ -466,6 +486,7 @@ def precalculate_metrics():
             print 'Read %s variants. Took %s seconds' % (progress, int(time.time() - start_time))
     print 'Done reading variants. Dropping metrics database... '
     db.metrics.drop()
+    db.create_collection('metrics', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
     print 'Dropped metrics database. Calculating metrics...'
     for metric in metrics:
         bin_range = None
@@ -539,19 +560,19 @@ def awesome():
 
     print "Searched for %s: %s" % (datatype, identifier)
     if datatype == 'gene':
-        return redirect('/gene/{}'.format(identifier))
+        return redirect('gene/{}'.format(identifier))
     elif datatype == 'transcript':
-        return redirect('/transcript/{}'.format(identifier))
+        return redirect('transcript/{}'.format(identifier))
     elif datatype == 'variant':
-        return redirect('/variant/{}'.format(identifier))
+        return redirect('variant/{}'.format(identifier))
     elif datatype == 'region':
-        return redirect('/region/{}'.format(identifier))
+        return redirect('region/{}'.format(identifier))
     elif datatype == 'dbsnp_variant_set':
-        return redirect('/dbsnp/{}'.format(identifier))
+        return redirect('dbsnp/{}'.format(identifier))
     elif datatype == 'error':
-        return redirect('/error/{}'.format(identifier))
+        return redirect('error/{}'.format(identifier))
     elif datatype == 'not_found':
-        return redirect('/not_found/{}'.format(identifier))
+        return redirect('not_found/{}'.format(identifier))
     else:
         raise Exception
 
@@ -921,6 +942,7 @@ def read_viz_files(path):
     logging.info("readviz: range request: %s-%s %s" % (m.group(1), m.group(2), full_path))
     return rv
 
+app.wsgi_app = DispatcherMiddleware(app, {'/exac': app.wsgi_app})
 
 if __name__ == "__main__":
     runner = Runner(app)  # adds Flask command line options for setting host, port, etc.
