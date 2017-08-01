@@ -78,6 +78,22 @@ app.config.update(dict(
 GENE_CACHE_DIR = os.path.join(os.path.dirname(__file__), 'gene_cache')
 GENES_TO_CACHE = {l.strip('\n') for l in open(os.path.join(os.path.dirname(__file__), 'genes_to_cache.txt'))}
 
+def configure_path(data_path):
+    app.config.update(dict(
+    SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), data_path, '*.vcf.gz')),
+    GENCODE_GTF=os.path.join(os.path.dirname(__file__), data_path, 'gencode.gtf.gz'),
+    CANONICAL_TRANSCRIPT_FILE=os.path.join(os.path.dirname(__file__), data_path, 'canonical_transcripts.txt.gz'),
+    OMIM_FILE=os.path.join(os.path.dirname(__file__), data_path, 'omim_info.txt.gz'),
+    BASE_COVERAGE_FILES=glob.glob(os.path.join(os.path.dirname(__file__), data_path, 'coverage', 'Panel.*.coverage.txt.gz')),
+    DBNSFP_FILE=os.path.join(os.path.dirname(__file__), data_path, 'dbNSFP2.6_gene.gz'),
+    CONSTRAINT_FILE=os.path.join(os.path.dirname(__file__), data_path, 'forweb_cleaned_exac_r03_march16_z_data_pLI_CNV-final.txt.gz'),
+    MNP_FILE=os.path.join(os.path.dirname(__file__), data_path, 'MNPs_NotFiltered_ForBrowserRelease.txt.gz'),
+    CNV_FILE=os.path.join(os.path.dirname(__file__), data_path, 'exac-gencode-exon.cnt.final.pop3'),
+    CNV_GENE_FILE=os.path.join(os.path.dirname(__file__), data_path, 'exac-final-cnvs.gene.rank'),
+    DBSNP_FILE=os.path.join(os.path.dirname(__file__), data_path, 'dbsnp142.txt.bgz')
+    ))
+    return null
+
 def connect_db():
     """
     Connects to the specific database.
