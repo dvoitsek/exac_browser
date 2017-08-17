@@ -21,6 +21,7 @@ def get_base_coverage_from_file(base_coverage_file):
     """
     Read a base coverage file and return iter of dicts that look like:
     {
+        '_id': '<chr>-<pos>'
         'xpos': 1e9+1,
         'mean': 0.0,
         'median': 0.0,
@@ -44,6 +45,7 @@ def get_base_coverage_from_file(base_coverage_file):
         d = {
             'xpos': get_xpos(fields[0], int(fields[1])),
             'pos': int(fields[1]),
+            '_id': 'chr' + int(fields[0]) + '-' + int(fields[1])
         }
         for i, k in enumerate(float_header_fields):
             d[k] = float(fields[i+2])
@@ -76,7 +78,10 @@ def get_variants_from_sites_vcf(sites_vcf):
             info_field = dict([(x.split('=', 1)) if '=' in x else (x, x) for x in re.split(';(?=\w)', fields[7])])
             consequence_array = info_field['CSQ'].split(',') if 'CSQ' in info_field else []
             annotations = [dict(zip(vep_field_names, x.split('|'))) for x in consequence_array if len(vep_field_names) == len(x.split('|'))]
-            coding_annotations = [ann for ann in annotations if ann['Feature'].startswith('ENST')]
+            try:
+                coding_annotations = [ann for ann in annotations if ann['Feature'].startswith('ENST')]
+            except KeyError:
+                pass
 
             alt_alleles = fields[4].split(',')
 
@@ -100,6 +105,7 @@ def get_variants_from_sites_vcf(sites_vcf):
                 variant['xstart'] = variant['xpos']
                 variant['xstop'] = variant['xpos'] + len(variant['alt']) - len(variant['ref'])
                 variant['variant_id'] = '{}-{}-{}-{}'.format(variant['chrom'], variant['pos'], variant['ref'], variant['alt'])
+                variant['_id'] = variant['variant_id'] + '-' + app.config['REFERENCE'] + '-' + app.config['REFERENCE_ALTERNATIVE']
                 variant['orig_alt_alleles'] = [
                     '{}-{}-{}-{}'.format(variant['chrom'], *get_minimal_representation(fields[1], fields[3], x))
                     for x in alt_alleles
@@ -108,37 +114,65 @@ def get_variants_from_sites_vcf(sites_vcf):
                 variant['filter'] = fields[6]
                 variant['vep_annotations'] = vep_annotations
 
-                variant['allele_count'] = int(info_field['AC_Adj'].split(',')[i])
+                variant['allele_count'] = int(info_field.get('AC_Adj', "0").split(',')[i])
                 if not variant['allele_count'] and variant['filter'] == 'PASS': variant['filter'] = 'AC_Adj0' # Temporary filter
-                variant['allele_num'] = int(info_field['AN_Adj'])
-
-                if variant['allele_num'] > 0:
-                    variant['allele_freq'] = variant['allele_count']/float(info_field['AN_Adj'])
-                else:
+                try:
+                    variant['allele_num'] = int(info_field['AN_Adj'])
+                    if variant['allele_num'] > 0:
+                        variant['allele_freq'] = variant['allele_count']/float(info_field['AN_Adj'])
+                except KeyError:
                     variant['allele_freq'] = None
+                    pass
 
-                variant['pop_acs'] = dict([(POPS[x], int(info_field['AC_%s' % x].split(',')[i])) for x in POPS])
-                variant['pop_ans'] = dict([(POPS[x], int(info_field['AN_%s' % x])) for x in POPS])
-                variant['pop_homs'] = dict([(POPS[x], int(info_field['Hom_%s' % x].split(',')[i])) for x in POPS])
+                try:
+                    variant['pop_acs'] = dict([(POPS[x], int(info_field['AC_%s' % x].split(',')[i])) for x in POPS])
+                except KeyError:
+                    pass
+                try:
+                    variant['pop_ans'] = dict([(POPS[x], int(info_field['AN_%s' % x])) for x in POPS])
+                except KeyError:
+                    pass
+                try:
+                    variant['pop_homs'] = dict([(POPS[x], int(info_field['Hom_%s' % x].split(',')[i])) for x in POPS])
 #                variant['ac_male'] = info_field['AC_MALE']
 #                variant['ac_female'] = info_field['AC_FEMALE']
 #                variant['an_male'] = info_field['AN_MALE']
 #                variant['an_female'] = info_field['AN_FEMALE']
-                variant['hom_count'] = sum(variant['pop_homs'].values())
-                if variant['chrom'] in ('X', 'Y'):
-                    variant['pop_hemis'] = dict([(POPS[x], int(info_field['Hemi_%s' % x].split(',')[i])) for x in POPS])
-                    variant['hemi_count'] = sum(variant['pop_hemis'].values())
-                variant['quality_metrics'] = dict([(x, info_field[x]) for x in METRICS if x in info_field])
+                    variant['hom_count'] = sum(variant['pop_homs'].values())
+                except KeyError:
+                    pass
+                try:
+                    if variant['chrom'] in ('X', 'Y'):
+                        variant['pop_hemis'] = dict([(POPS[x], int(info_field['Hemi_%s' % x].split(',')[i])) for x in POPS])
+                        variant['hemi_count'] = sum(variant['pop_hemis'].values())
+                except KeyError:
+                    pass
+                try:
+                    variant['quality_metrics'] = dict([(x, info_field[x]) for x in METRICS if x in info_field])
+                except KeyError:
+                    pass
 
-                variant['genes'] = list({annotation['Gene'] for annotation in vep_annotations})
-                variant['transcripts'] = list({annotation['Feature'] for annotation in vep_annotations})
+                try:
+                    variant['genes'] = list({annotation['Gene'] for annotation in vep_annotations})
+                except KeyError:
+                    pass
+                try:
+                    variant['transcripts'] = list({annotation['Feature'] for annotation in vep_annotations})
+                except KeyError:
+                    pass
 
-                if 'DP_HIST' in info_field:
-                    hists_all = [info_field['DP_HIST'].split(',')[0], info_field['DP_HIST'].split(',')[i+1]]
-                    variant['genotype_depths'] = [zip(dp_mids, map(int, x.split('|'))) for x in hists_all]
-                if 'GQ_HIST' in info_field:
-                    hists_all = [info_field['GQ_HIST'].split(',')[0], info_field['GQ_HIST'].split(',')[i+1]]
-                    variant['genotype_qualities'] = [zip(gq_mids, map(int, x.split('|'))) for x in hists_all]
+                try:
+                    if 'DP_HIST' in info_field:
+                        hists_all = [info_field['DP_HIST'].split(',')[0], info_field['DP_HIST'].split(',')[i+1]]
+                        variant['genotype_depths'] = [zip(dp_mids, map(int, x.split('|'))) for x in hists_all]
+                except KeyError:
+                    pass
+                try:
+                    if 'GQ_HIST' in info_field:
+                        hists_all = [info_field['GQ_HIST'].split(',')[0], info_field['GQ_HIST'].split(',')[i+1]]
+                        variant['genotype_qualities'] = [zip(gq_mids, map(int, x.split('|'))) for x in hists_all]
+                except KeyError:
+                    pass
 
                 yield variant
         except Exception:
@@ -303,12 +337,12 @@ def get_exons_from_gencode_gtf(gtf_file):
 
 
 def get_cnvs_from_txt(cnv_txt_file):
-    """                                                                                                                                                                                                                                  
-    Parse gencode txt file;                                                                                                                                                                                                              
-    Returns iter of gene dicts                                                                                                                                                                                                           
     """
-    header = cnv_txt_file.next() # gets rid of the header                                                                                                                                                                                
-    #print header                                                                                                                                                                                                                        
+    Parse gencode txt file;
+    Returns iter of gene dicts
+    """
+    header = cnv_txt_file.next() # gets rid of the header
+    #print header
     for line in cnv_txt_file:
 
         fields = line.rsplit()
@@ -325,11 +359,11 @@ def get_cnvs_from_txt(cnv_txt_file):
         delpop60 = fields[10]
         duppop0 = fields[11]
         duppop60 = fields[12]
-        
 
-        #find gene from DB.genes, get ID                                                                                                                                                                                                 
-        #find exon of that gene that this CNV referes to from db.exons, get ID                                                                                                                                                           
-        #add the object reference to the cnv dict.                                                                                                                                                                                       
+
+        #find gene from DB.genes, get ID
+        #find exon of that gene that this CNV referes to from db.exons, get ID
+        #add the object reference to the cnv dict.
         cnv = {
             'transcript': transcript,
             'gene': gene,
@@ -351,7 +385,7 @@ def get_cnvs_from_txt(cnv_txt_file):
 
 
 def get_cnvs_per_gene(cnv_gene_file):
-    header = cnv_gene_file.next() # gets rid of the header                                                                                                                                                                               
+    header = cnv_gene_file.next() # gets rid of the header
     for line in cnv_gene_file:
 
         fields = line.rsplit()

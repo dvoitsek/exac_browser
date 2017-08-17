@@ -1,9 +1,11 @@
 git+https://github.com/mitsuhiko/flask.git
-Flask-Script==2.0.5
+Flask==0.10.1
+Flask-Compress==1.0.2
+Flask-ErrorMail==0.2.2
+Flask-Mail==0.9.1
+Flask-Runner==2.1.1
+Flask-Script==0.6.7
 ipython==2.1.0
 pymongo==2.7.1
 pysam
-Flask-Runner
-Flask-Compress==1.0.2
-Flask-ErrorMail==0.2.2
 numpy
