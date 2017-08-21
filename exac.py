@@ -48,10 +48,13 @@ def print_warning(str):
 def print_error(str):
     print termcolors.FAIL + str + termcolors.ENDC
 
-def file_to_source(filepath):
-    output = ""
-    call("xxhsum", sites_file, output)
-    return output.split(' ')[0]
+def print_info(str):
+    print termcolors.OKBLUE + str + termcolors.ENDC
+
+def file_to_source(path):
+    return ntpath.basename(path)
+#    call(["xxhsum", filepath, output])
+#    return output.split(' ')[0]
 
 logging.getLogger().addHandler(logging.StreamHandler())
 logging.getLogger().setLevel(logging.INFO)
@@ -70,15 +73,15 @@ cache = SimpleCache()
 EXAC_FILES_DIRECTORY = '/home/istrian/tests/exac/exac_data'
 REGION_LIMIT = 1E5
 EXON_PADDING = 50
-MONGO_UPDATE_PARAMS={"w": 0, "upsert": True}
+MONGO_UPDATE_PARAMS={"w": 0, "upsert": "true"}
 # Load default config and override config from an environment variable
 app.config.update(dict(
     DB_HOST='localhost',
-    DB_PORT=27017,
-    DB_NAME='exac',
+    DB_PORT=27018,
+    DB_NAME='exac_test',
     DEBUG=True,
     SECRET_KEY='development key',
-    LOAD_DB_PARALLEL_PROCESSES = 1,  # contigs assigned to threads, so good to make this a factor of 24 (eg. 2,3,4,6,8)
+    LOAD_DB_PARALLEL_PROCESSES = 4,  # contigs assigned to threads, so good to make this a factor of 24 (eg. 2,3,4,6,8)
     SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'ExAC*.vcf.gz')),
     GENCODE_GTF=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'gencode.gtf.gz'),
     CANONICAL_TRANSCRIPT_FILE=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'canonical_transcripts.txt.gz'),
@@ -140,6 +143,7 @@ def parse_tabix_file_subset(tabix_filenames, subset_i, subset_n, record_parser):
         subset_n: total number of subsets
         record_parser: a function that takes a file-like object and returns a generator of parsed records
     """
+    print_info("Parsing tabix: %s" % tabix_filenames)
     start_time = time.time()
     open_tabix_files = [pysam.Tabixfile(tabix_filename) for tabix_filename in tabix_filenames]
     tabix_file_contig_pairs = [(tabix_file, contig) for tabix_file in open_tabix_files for contig in tabix_file.contigs]
@@ -152,7 +156,7 @@ def parse_tabix_file_subset(tabix_filenames, subset_i, subset_n, record_parser):
     for tabix_file, contig in tabix_file_contig_subset:
         header_iterator = tabix_file.header
         records_iterator = tabix_file.fetch(contig, 0, 10**9, multiple_iterators=True)
-        for parsed_record in record_parser(itertools.chain(header_iterator, records_iterator)):
+        for parsed_record in record_parser(itertools.chain(header_iterator, records_iterator), app):
             counter += 1
             yield parsed_record
 
@@ -164,17 +168,11 @@ def parse_tabix_file_subset(tabix_filenames, subset_i, subset_n, record_parser):
     print("Finished loading subset %(subset_i)s from  %(short_filenames)s (%(counter)s records)" % locals())
 
 
-def load_base_coverage(directory, files):
-    def load_coverage(coverage_file, i, n, db):
-        source = file_to_source(coverage_file)
-        if db.base_coverage.count({"source": source}) != 0:
-            print_warning("Coverage file %s is already in database."(coverage_file))
-            print_warning("If you know the file has been updated please use drop_sources and try this operation again.")
-            print_warning("The other files will still be analysed.")
-            return
-        add_source(sites_file, db, source)
-        coverage_generator = parse_tabix_file_subset(coverage_file, i, n, get_base_coverage_from_file)
+def load_base_coverage(directory):
+    def load_coverage(coverage_file, i, n, db, source):
+        coverage_generator = parse_tabix_file_subset([coverage_file], i, n, get_base_coverage_from_file)
         for coverage in coverage_generator:
+            coverage['_id'] = coverage['_id'] + '-' + source
             coverage['source'] = source
             try:
                 db.base_coverage.insert(coverage)
@@ -185,21 +183,29 @@ def load_base_coverage(directory, files):
     # db.base_coverage.drop()
     # print("Dropped db.base_coverage")
     if "base_coverage" not in db.collection_names():
-        db.create_collection('base_coverage', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+        db.create_collection('base_coverage')
         # load coverage first; variant info will depend on coverage
         db.base_coverage.ensure_index('xpos')
+        db.base_coverage.ensure_index('source')
 
     procs = []
     coverage_files = [];
     if directory != None:
         coverage_files = glob.glob(os.path.join(os.path.dirname(directory), '*.txt.gz'))
-    coverage_files = coverage_files + files;
+    print "%s" % coverage_files
     # coverage_files = app.config['BASE_COVERAGE_FILES']
     num_procs = app.config['LOAD_DB_PARALLEL_PROCESSES']
     # random.shuffle(app.config['BASE_COVERAGE_FILES'])
     for file in coverage_files:
+        source = file_to_source(file)
+#        if db.sources.count({"source": source}) > 0:            
+#            print_warning("Coverage file %s is already in database." % (file))
+#            print_warning("If you know the file has been updated please use drop_source and try this operation again.")
+#            print_warning("The other files will still be analysed.")
+#            continue
+#        add_source(file, db, source)
         for i in range(num_procs):
-            p = Process(target=load_coverage, args=(file, i, num_procs, db))
+            p = Process(target=load_coverage, args=(file, i, num_procs, db, source))
             p.start()
             procs.append(p)
     return procs
@@ -207,48 +213,63 @@ def load_base_coverage(directory, files):
     #print 'Done loading coverage. Took %s seconds' % int(time.time() - start_time)
 
 
-def load_variants_file(ref, alt, files):
-    def load_variants(sites_file, i, n, db):
-        source = file_to_source(sites_file)
-        # source = ntpath.basename(sites_file)
-        if db.variants.count({"source": source}) != 0:
-            print_warning("Variants file %s is already in database. If you know the file has been updated please use drop_sources. The other files will still be analysed."(sites_file))
-            return
-        add_source(sites_file, db, source)
+def load_variants_file(ref, alt, file):
+    def load_variants(sites_file, i, n, db, source):
         variants_generator = parse_tabix_file_subset([sites_file], i, n, get_variants_from_sites_vcf)
         for variant in variants_generator:
             try:
                 update_done = False
-                while(!update_done):
-                    saved_variant = db.variants.findOne({'_id': variants_generator['_id']})
-                    new_variant = deepcopy(saved_variant)
-                    new_variant['allele_count'] += variant['allele_count']
-                    new_variant['genotype_depths'] += variant['genotype_depths']
+                while(not update_done):
+                    saved_variant = db.variants.find_one({'_id': variant['_id']})
+#                    new_variant = copy.deepcopy(saved_variant)
+                    if saved_variant is not None:
+                        # Check if source is known
+                        if source in saved_variant["sources"]:
+                            continue
+                        else:
+                            pop_homs = copy.deepcopy(variant['pop_homs'])
+                            for key, value in saved_variant['pop_homs']:
+                                pop_homs[key] += value
+                            pop_acs = copy.deepcopy(variant['pop_acs'])
+                            for key, value in saved_variant['pop_acs']:
+                                pop_acs[key] += value
+                            result = db.variants.update(
+                                saved_variant,
+                                {
+                                    "$push": 
+                                        { 
+                                          "sources": source,
+                                          "genotype_depths": variant["genotype_depths"],
+                                          "genotype_qualities": variant["genotype_qualities"],
+                                          "vep_annotations": variant["vep_annotations"]
+                                        },
+                                    "$inc": 
+                                        {
+                                          "allele_count": variant["allele_count"]
+                                        },
+                                    "$set":
+                                        {
+                                          "pop_homs": pop_homs,
+                                          "pop_acs": pop_acs
+                                        }
+                                }, upsert=False)
+                            update_done = result.matched_count == 1 and result.modified_count == 1
                     # TODO do something with quality_metrics
-                    for key, value in new_variant['pop_homs']:
-                        value += variant[key]
-                    for key, value in new_variant['pop_acs']:
-                        value += variant[key]
                     # TODO do something about allele_freq
-                    new_variant['genotype_qualities'] += variant['genotype_qualities']
-                    new_variant['vep_annotations'] += variant['vep_annotations']
-                    new_variant['source'] = source
-
-                    result = db.variants.update(saved_variant,
-                    {'$setOnInsert': variant,
-                    '$set': new_variant},
-                    MONGO_UPDATE_PARAMS)
-                    update_done = result.nMatched == 1 && result.nUpserted == 1
-                    if !update_done:
-                        print_error("Could not update document %s, for reason %s retrying"(variants_generator['_id', result]))
+                    else:
+                        variant["sources"] = [source]
+                        db.variants.insert(variant)
+                        update_done = True
+                    if not update_done:
+                        print_error("Could not update document %s, for reason %s retrying" % (variant['_id'], result.raw_result))
             except pymongo.errors.InvalidOperation:
-        pass  # handle error when variant_generator is empty
+              pass  # handle error when variant_generator is empty
 
     db = get_db()
-    if "variants" not in db.collection_names()
+    if "variants" not in db.collection_names():
     # db.variants.drop()
     # print("Dropped db.variants")
-        db.create_collection('variants', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+        db.create_collection('variants')
         # grab variants from sites VCF
         db.variants.ensure_index('xpos')
         db.variants.ensure_index('xstart')
@@ -256,11 +277,16 @@ def load_variants_file(ref, alt, files):
         db.variants.ensure_index('rsid')
         db.variants.ensure_index('genes')
         db.variants.ensure_index('transcripts')
-        db.variants.ensure_index('source')
+        db.variants.ensure_index('sources')
 
+    source = file_to_source(file)
+    if db.sources.count({"source": source}) != 0:
+        print_warning("Variants file %s is already in database. If you know the file has been updated please use drop_sources. The other files will still be analysed."(file))
+        return
+    add_source(file, db, source)
     app.config['REFERENCE'] = ref;
     app.config['REFERENCE_ALTERNATIVE'] = alt;
-    sites_vcfs = files;
+    sites_vcfs = [file];
     # sites_vcfs = app.config['SITES_VCFS']
     # if len(sites_vcfs) == 0:
     #     raise IOError("No vcf file found")
@@ -271,29 +297,29 @@ def load_variants_file(ref, alt, files):
     num_procs = app.config['LOAD_DB_PARALLEL_PROCESSES']
     for sites_vcf in sites_vcfs:
         for i in range(num_procs):
-            p = Process(target=load_variants, args=(sites_vcf, i, num_procs, db))
+            p = Process(target=load_variants, args=(sites_vcf, i, num_procs, db, source))
             p.start()
             procs.append(p)
     return procs
 
     #print 'Done loading variants. Took %s seconds' % int(time.time() - start_time)
 
-def drop_sources(files):
-    def identify_and_drop_file(file, n, db):
-        source = file_to_source(file)
-        removed = 0
-        for dbname in db.collection_names():
-            result = db[dbname].remove({"source": source})
-            removed =+ result.nRemoved
-        print "Dropped %s data elements originating from %s"(removed, source)
+def drop_source(file):
     db = get_db()
     removed = 0
-    procs = []
-    num_procs = app.config['LOAD_DB_PARALLEL_PROCESSES']
-    for file in files:
-        for i in range(num_procs):
-            p = Process(target=identify_and_drop_file, args=(file, num_procs, db, removed))
-            procs.append(p)
+    source = file_to_source(file)
+    for dbname in db.collection_names():
+        print_info("Deleting %s from %s" % (source, dbname))
+        result = db[dbname].update_many({"sources": {"$all": [source]}},
+            {"$pullAll": {"sources": [source]}},
+            upsert=False)
+        result = db[dbname].delete_many({"sources": {"$size":0}})
+        removed += result.deleted_count
+        result = db[dbname].delete_many({"source": source})
+        removed += result.deleted_count
+    print_info("Removed %s items from all collections" % removed)
+    db.sources.delete_many({"source": source})
+    print_info("Source %s dropped" % source)
 
 def load_constraint_information():
     db = get_db()
@@ -301,7 +327,8 @@ def load_constraint_information():
     db.constraint.drop()
     print 'Dropped db.constraint.'
 
-    db.create_collection('constraint', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+    db.create_collection('constraint')
+    db.constraint.ensure_index('source')
 
 
     start_time = time.time()
@@ -342,31 +369,45 @@ def load_gene_models(canonical_transcript_filepath, omim_filepath, dbnsfp_filepa
     # print 'Dropped db.genes, db.transcripts, and db.exons.'
     collections = db.collection_names();
     if "genes" not in collections:
-        db.create_collection('genes', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+        db.create_collection('genes')
+        db.genes.ensure_index('source')
+        db.genes.ensure_index('source_gencode')
+        db.genes.ensure_index('source_transcript')
+        db.genes.ensure_index('source_omim')
+        db.genes.ensure_index('source_dbnsfp')
     if "transcripts" not in collections:
-        db.create_collection('transcripts', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+        db.create_collection('transcripts')
+        db.transcripts.ensure_index('source')
     if "exons" not in collections:
-        db.create_collection('exons', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+        db.create_collection('exons')
+        db.exons.ensure_index('source')
 
     source_transcripts = file_to_source(canonical_transcript_filepath)
     source_omim = file_to_source(omim_filepath)
     source_dbnsfp = file_to_source(dbnsfp_filepath)
     source_gencode = file_to_source(gencode_filepath)
+
     start_time = time.time()
 
-    if db.sources.count({"source": source_gencode}) != 0:
-        print_warning("Gencode file %s is already in database."(gencode_filepath))
-        print_warning("If you know the file has been updated please use drop_sources and try this operation again.")
-        print_warning("The other files will still be analysed.")
-        return
+    source_full = source_gencode + '-' + source_transcripts + '-' + source_omim + '-' + source_dbnsfp
+#    if db.sources.count({"source": source_full}) != 0:
+#        print_warning("Gene combination of files \n%s \n%s \n%s \n%s\n is already in database." % (gencode_filepath, canonical_transcript_filepath, omim_filepath, dbnsfp_filepath))
+#        print_warning("If you know the file has been updated please use drop_source and try this operation again.")
+#        print_warning("The other files will still be analysed.")
+#        return
 
-    add_source(gencode_filepath, db, source_gencode)
+#    add_source(source_full, db, source_full)
+#    add_source(gencode_filepath, db, source_gencode)
+#    add_source(canonical_transcript_filepath, db, source_transcripts)
+#    add_source(omim_filepath, db, source_omim)
+#    add_source(dbnsfp_filepath, db, source_dbnsfp)
+
 
     canonical_transcripts = {}
     with gzip.open(canonical_transcript_filepath) as canonical_transcript_file:
         for gene, transcript in get_canonical_transcripts(canonical_transcript_file):
             canonical_transcripts[gene] = transcript
-            canonical_transcripts[gene]["source"] = source_transcripts
+            # setattr(canonical_transcripts[gene], "source", source_transcripts)
 
     omim_annotations = {}
     with gzip.open(omim_filepath) as omim_file:
@@ -375,14 +416,14 @@ def load_gene_models(canonical_transcript_filepath, omim_filepath, dbnsfp_filepa
                 continue
             gene, transcript, accession, description = fields
             omim_annotations[gene] = (accession, description)
-            omim_annotations[gene]["source"] = source_omim
+            # setattr(omim_annotations[gene], "source", source_omim)
 
     dbnsfp_info = {}
     with gzip.open(dbnsfp_filepath) as dbnsfp_file:
         for dbnsfp_gene in get_dbnsfp_info(dbnsfp_file):
             other_names = [other_name.upper() for other_name in dbnsfp_gene['gene_other_names']]
             dbnsfp_info[dbnsfp_gene['ensembl_gene']] = (dbnsfp_gene['gene_full_name'], other_names)
-            dbnsfp_info[dbnsfp_gene['ensembl_gene']]["source"] = source_dbnsfp
+            # setattr(dbnsfp_info[dbnsfp_gene['ensembl_gene']], "source", source_dbnsfp)
 
     print 'Done loading metadata. Took %s seconds' % int(time.time() - start_time)
 
@@ -391,6 +432,7 @@ def load_gene_models(canonical_transcript_filepath, omim_filepath, dbnsfp_filepa
     with gzip.open(gencode_filepath) as gtf_file:
         for gene in get_genes_from_gencode_gtf(gtf_file):
             gene_id = gene['gene_id']
+            gene['_id'] = gene['gene_id'] + '-' + source_full
             if gene_id in canonical_transcripts:
                 gene['canonical_transcript'] = canonical_transcripts[gene_id]
             if gene_id in omim_annotations:
@@ -399,7 +441,8 @@ def load_gene_models(canonical_transcript_filepath, omim_filepath, dbnsfp_filepa
             if gene_id in dbnsfp_info:
                 gene['full_gene_name'] = dbnsfp_info[gene_id][0]
                 gene['other_names'] = dbnsfp_info[gene_id][1]
-            gene["source"] = source_gencode
+            gene["source"] = source_full
+            gene["source_gencode"] = source_gencode
             gene["source_transcript"] = source_transcripts
             gene["source_omim"] = source_omim
             gene["source_names"] = source_dbnsfp
@@ -451,7 +494,7 @@ def load_cnv_models():
 
     db.cnvs.drop()
     print 'Dropped db.cnvs.'
-    db.create_collection('cnvs', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+    db.create_collection('cnvs')
 
 
     start_time = time.time()
@@ -467,7 +510,7 @@ def drop_cnv_genes():
     db = get_db()
     start_time = time.time()
     db.cnvgenes.drop()
-    db.create_collection('cnvgenes', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+    db.create_collection('cnvgenes')
 
 
 def load_cnv_genes():
@@ -485,17 +528,14 @@ def load_cnv_genes():
 def load_dbsnp_file(dbsnp_file):
     db = get_db()
 
-    def load_dbsnp(dbsnp_file, i, n, db):
-        source = file_to_source(dbsnp_file)
-        if db.dbsnp.count({"source": source}) != 0:
-            print_warning("DBSNP file %s is already in database."(dbsnp_file))
-            print_warning("If you know the file has been updated please use drop_sources and try this operation again.")
-            print_warning("The other files will still be analysed.")
-            return
+    def load_dbsnp(dbsnp_file, i, n, db, source):
+#        source = file_to_source(dbsnp_file)
+#        if db.dbsnp.count({"source": source}) != 0:
         if os.path.isfile(dbsnp_file + ".tbi"):
             dbsnp_record_generator = parse_tabix_file_subset([dbsnp_file], i, n, get_snp_from_dbsnp_file)
             for dbsnp_record in dbsnp_record_generator:
                 dbsnp_record["source"] = source
+                dbsnp_record["_id"] = "{}-{}-{}".format(dbsnp_record["xpos"], dbsnp_record["rsid"], source)
                 try:
                     db.dbsnp.insert(dbsnp_record, w=0)
                 except pymongo.errors.InvalidOperation:
@@ -504,15 +544,24 @@ def load_dbsnp_file(dbsnp_file):
             with gzip.open(dbsnp_file) as f:
                 for snp in get_snp_from_dbsnp_file(f):
                     snp["source"] = source
+                    snp["_id"] = "{}-{}-{}".format(dbsnp_record["xpos"], dbsnp_record["rsid"], source)
                     db.dbsnp.insert(snp, w=0)
 
     if "dbsnp" not in db.collection_names():
-        db.create_collection('dbsnp', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+        db.create_collection('dbsnp')
         db.dbsnp.ensure_index('rsid')
         db.dbsnp.ensure_index('xpos')
 
     start_time = time.time()
     # dbsnp_file = app.config['DBSNP_FILE']
+
+    source = file_to_source(dbsnp_file)
+    if db.sources.count({"source": source}) > 0:
+        print_warning("DBSNP file %s is already in database."(dbsnp_file))
+        print_warning("If you know the file has been updated please use drop_source and try this operation again.")
+        print_warning("The other files will still be analysed.")
+        return
+    add_source(source)
 
     print "Loading dbsnp from %s" % dbsnp_file
     if os.path.isfile(dbsnp_file + ".tbi"):
@@ -531,7 +580,7 @@ def load_dbsnp_file(dbsnp_file):
 
     procs = []
     for i in range(num_procs):
-        p = Process(target=load_dbsnp, args=(dbsnp_file, i, num_procs, db))
+        p = Process(target=load_dbsnp, args=(dbsnp_file, i, num_procs, db, source))
         p.start()
         procs.append(p)
 
@@ -608,7 +657,7 @@ def precalculate_metrics():
     binned_metrics = defaultdict(list)
     progress = 0
     start_time = time.time()
-    for variant in db.variants.find(fields=['quality_metrics', 'site_quality', 'allele_num', 'allele_count']):
+    for variant in db.variants.find(projection=['quality_metrics', 'site_quality', 'allele_num', 'allele_count']):
         for metric, value in variant['quality_metrics'].iteritems():
             metrics[metric].append(float(value))
         qual = float(variant['site_quality'])
@@ -628,7 +677,7 @@ def precalculate_metrics():
             print 'Read %s variants. Took %s seconds' % (progress, int(time.time() - start_time))
     print 'Done reading variants. Dropping metrics database... '
     db.metrics.drop()
-    db.create_collection('metrics', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
+    db.create_collection('metrics')
     print 'Dropped metrics database. Calculating metrics...'
     for metric in metrics:
         bin_range = None
@@ -671,25 +720,28 @@ def get_db():
     """
     if not hasattr(g, 'db_conn'):
         g.db_conn = connect_db()
-    if "sources" not in g.db_conn.collection_names():
-        g.db_conn.create_collection('sources', storageEngine={'wiredTiger': {'configString': 'block_compressor=zlib'}})
-        g.db_conn.sources.ensure_index('source')
-        g.db_conn.sources.ensure_index('file')
-        g.db_conn.sources.ensure_index('last_indexed')
     return g.db_conn
 
 def add_source(file, db, source=None):
     """
     Adds the file to the database as source. If source arg is provided, no hash will be recalculated by this function.
     """
-    if source not None:
-        db.sources.update(
-        {"source": source},
-        {"$setOnInsert": {"file": os.path.basename(file), "last_indexed": time.time()}, {"file": os.path.basename(file), "last_indexed": time.time(), "source": source}},
-        MONGO_UPDATE_PARAMS)
-    else:
+    if "sources" not in db.collection_names():
+        print "Collections: %s" % db.collection_names()
+        db.create_collection('sources')
+        db.sources.ensure_index('source')
+        db.sources.ensure_index('file')
+        db.sources.ensure_index('last_indexed')
+    if source == None:
         source = file_to_source(file)
-        add_source(file, db, source)
+    
+    db.sources.insert(
+            {
+               "file": os.path.basename(file), 
+               "last_indexed": time.time(), 
+               "source": source,
+               "_id": source
+            })
 
 # @app.teardown_appcontext
 # def close_db(error):

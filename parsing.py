@@ -17,7 +17,7 @@ POPS = {
 }
 
 
-def get_base_coverage_from_file(base_coverage_file):
+def get_base_coverage_from_file(base_coverage_file, app):
     """
     Read a base coverage file and return iter of dicts that look like:
     {
@@ -45,14 +45,14 @@ def get_base_coverage_from_file(base_coverage_file):
         d = {
             'xpos': get_xpos(fields[0], int(fields[1])),
             'pos': int(fields[1]),
-            '_id': 'chr' + int(fields[0]) + '-' + int(fields[1])
+            '_id': 'chr%s-%s' % (int(fields[0]), int(fields[1]))
         }
         for i, k in enumerate(float_header_fields):
             d[k] = float(fields[i+2])
         yield d
 
 
-def get_variants_from_sites_vcf(sites_vcf):
+def get_variants_from_sites_vcf(sites_vcf, app):
     """
     Parse exac sites VCF file and return iter of variant dicts
     sites_vcf is a file (gzipped), not file path
@@ -105,7 +105,7 @@ def get_variants_from_sites_vcf(sites_vcf):
                 variant['xstart'] = variant['xpos']
                 variant['xstop'] = variant['xpos'] + len(variant['alt']) - len(variant['ref'])
                 variant['variant_id'] = '{}-{}-{}-{}'.format(variant['chrom'], variant['pos'], variant['ref'], variant['alt'])
-                variant['_id'] = variant['variant_id'] + '-' + app.config['REFERENCE'] + '-' + app.config['REFERENCE_ALTERNATIVE']
+                variant['_id'] = "{}-{}{}".format(variant['variant_id'], app.config['REFERENCE'], ("" if app.config['REFERENCE_ALTERNATIVE'] == "" else '-' + app.config['REFERENCE_ALTERNATIVE']))
                 variant['orig_alt_alleles'] = [
                     '{}-{}-{}-{}'.format(variant['chrom'], *get_minimal_representation(fields[1], fields[3], x))
                     for x in alt_alleles
@@ -442,7 +442,7 @@ def get_dbnsfp_info(dbnsfp_file):
         yield gene_info
 
 
-def get_snp_from_dbsnp_file(dbsnp_file):
+def get_snp_from_dbsnp_file(dbsnp_file, app):
     for line in dbsnp_file:
         fields = line.split('\t')
         if len(fields) < 3: continue
