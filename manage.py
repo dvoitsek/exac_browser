@@ -7,9 +7,10 @@ How does it work?
 from flask_script import Manager
 from exac import app
 import exac
+import log
 
 
-ACCEPTABLE_REF_ALTS = ['GRCh37-']
+ACCEPTABLE_REF_ALTS = ['GRCh37', 'hs37d5']
 manager = Manager(app)
 
 
@@ -48,12 +49,18 @@ def load_variants_file(reference, alt, file):
     Loads VCF files specified by the input. All input must be gzipped and tabix-indexed.
     Currently accepted input references and alternatives:
         - GRCh37
+        - hs37d5
     If your reference does not appear in this list, contact voitsekh@cng.fr
     '''
-    print "r=%s, f=%s" % (reference, file)
-    ref_alt_string = "%s-%s" % (reference, alt)
+    # print "r=%s, f=%s" % (reference, file)
+    # ref_alt_string = "%s-%s" % (reference, alt)
+    if alt:
+        ref_alt_string = "%s-%s" % (reference, alt)
+    else:
+        ref_alt_string = "%s" % reference
     if ref_alt_string not in ACCEPTABLE_REF_ALTS:
-      raise IOError("Not acceptable reference-alternative combination %s"(ref_alt_string))
+        log.print_error("Not acceptable reference-alternative combination %s" % ref_alt_string)
+        return
     exac.load_variants_file(reference, alt, file)
 
 #@manager.command

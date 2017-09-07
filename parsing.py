@@ -5,6 +5,9 @@ import re
 import traceback
 from utils import *
 import copy
+import log
+import align
+import hashlib
 
 POPS = {
     'AFR': 'African',
@@ -57,39 +60,51 @@ def get_variants_from_sites_vcf(sites_vcf, app):
     Parse exac sites VCF file and return iter of variant dicts
     sites_vcf is a file (gzipped), not file path
     """
-    vep_field_names = None
+    # vep_field_names = None
+    annot_field_names = None
+    lof_field_names = None
+    nmd_field_names = None
     for line in sites_vcf:
         try:
             line = line.strip('\n')
-            if line.startswith('##INFO=<ID=CSQ'):
-                vep_field_names = line.split('Format: ')[-1].strip('">').split('|')
-            if line.startswith('##INFO=<ID=DP_HIST'):
-                dp_mids = map(float, line.split('Mids: ')[-1].strip('">').split('|'))
-            if line.startswith('##INFO=<ID=GQ_HIST'):
-                gq_mids = map(float, line.split('Mids: ')[-1].strip('">').split('|'))
+            # if line.startswith('##INFO=<ID=CSQ'):
+            #     vep_field_names = line.split('Format: ')[-1].strip('">').split('|')
+            # if line.startswith('##INFO=<ID=DP_HIST'):
+            #     dp_mids = map(float, line.split('Mids: ')[-1].strip('">').split('|'))
+            # if line.startswith('##INFO=<ID=GQ_HIST'):
+            #     gq_mids = map(float, line.split('Mids: ')[-1].strip('">').split('|'))
+            if line.startswith('##INFO=<ID=ANN'):
+                annot_field_names = [ x.strip() for x in line.split('Functional annotations: ')[-1].strip('">\'').split('|') ]
+            if line.startswith('##INFO=<ID=LOF'):
+                lof_field_names = [ x.strip() for x in line.split('Format: ')[-1].strip('">\'').split('|') ]
+            if line.startswith('##INFO=<ID=NMD'):
+                nmd_field_names = [ x.strip() for x in line.split('Format: ')[-1].strip('">\'').split('|') ]
             if line.startswith('#'):
                 continue
 
             # If we get here, it's a variant line
-            if vep_field_names is None:
-                raise Exception("VEP_field_names is None. Make sure VCF header is present.")
+            # if vep_field_names is None:
+            #     raise Exception("VEP_field_names is None. Make sure VCF header is present.")
             # This elegant parsing code below is copied from https://github.com/konradjk/loftee
             fields = line.split('\t')
             info_field = dict([(x.split('=', 1)) if '=' in x else (x, x) for x in re.split(';(?=\w)', fields[7])])
-            consequence_array = info_field['CSQ'].split(',') if 'CSQ' in info_field else []
-            annotations = [dict(zip(vep_field_names, x.split('|'))) for x in consequence_array if len(vep_field_names) == len(x.split('|'))]
-            try:
-                coding_annotations = [ann for ann in annotations if ann['Feature'].startswith('ENST')]
-            except KeyError:
-                pass
+            # consequence_array = info_field['CSQ'].split(',') if 'CSQ' in info_field else []
+            # annotations = [dict(zip(vep_field_names, x.split('|'))) for x in consequence_array if len(vep_field_names) == len(x.split('|'))]
+            # try:
+            #     coding_annotations = [ann for ann in annotations if ann['Feature'].startswith('ENST')]
+            # except KeyError:
+            #     pass
+            annotations_array = [dict(zip(annot_field_names, x.split('|'))) for x in info_field['ANN'].split(',')]
+            lof = dict(zip(lof_field_names, info_field['LOF'].strip('( )'))) if 'LOF' in info_field else None
+            nmd = dict(zip(nmd_field_names, info_field['NMD'].strip('( )'))) if 'NMD' in info_field else None
 
             alt_alleles = fields[4].split(',')
 
             # different variant for each alt allele
             for i, alt_allele in enumerate(alt_alleles):
 
-                vep_annotations = [ann for ann in coding_annotations if int(ann['ALLELE_NUM']) == i + 1]
-
+                # vep_annotations = [ann for ann in coding_annotations if int(ann['ALLELE_NUM']) == i + 1]
+                annotations = [ ann for ann in annotations_array if ann['Allele'] == alt_allele ]
                 # Variant is just a dict
                 # Make a copy of the info_field dict - so all the original data remains
                 # Add some new keys that are allele-specific
@@ -112,67 +127,106 @@ def get_variants_from_sites_vcf(sites_vcf, app):
                 ]
                 variant['site_quality'] = float(fields[5])
                 variant['filter'] = fields[6]
-                variant['vep_annotations'] = vep_annotations
+                # variant['vep_annotations'] = vep_annotations
 
-                variant['allele_count'] = int(info_field.get('AC_Adj', "0").split(',')[i])
-                if not variant['allele_count'] and variant['filter'] == 'PASS': variant['filter'] = 'AC_Adj0' # Temporary filter
-                try:
-                    variant['allele_num'] = int(info_field['AN_Adj'])
-                    if variant['allele_num'] > 0:
-                        variant['allele_freq'] = variant['allele_count']/float(info_field['AN_Adj'])
-                except KeyError:
-                    variant['allele_freq'] = None
-                    pass
+                # Process INFO
+                db_info = {}
+                for key,value in info_field.items():
+                    if key == align.INFO['ANN'] or key == align.INFO['LOF'] or key == align.INFO['NMD']:
+                        continue
+                    try:
+                        dbkey = align.INFO[key]
+                        db_info[dbkey] = value if "," not in value else value.split(',')[i]
+                    except KeyError:
+                        log.print_warning("Alignment key %s not found in INFO alignment dictionary (align.py).")
+                        log.print_warning("This may be caused by new INFO types or may be wanted behavior")
+                        pass
+                variant['INFO'] = db_info
 
-                try:
-                    variant['pop_acs'] = dict([(POPS[x], int(info_field['AC_%s' % x].split(',')[i])) for x in POPS])
-                except KeyError:
-                    pass
-                try:
-                    variant['pop_ans'] = dict([(POPS[x], int(info_field['AN_%s' % x])) for x in POPS])
-                except KeyError:
-                    pass
-                try:
-                    variant['pop_homs'] = dict([(POPS[x], int(info_field['Hom_%s' % x].split(',')[i])) for x in POPS])
-#                variant['ac_male'] = info_field['AC_MALE']
-#                variant['ac_female'] = info_field['AC_FEMALE']
-#                variant['an_male'] = info_field['AN_MALE']
-#                variant['an_female'] = info_field['AN_FEMALE']
-                    variant['hom_count'] = sum(variant['pop_homs'].values())
-                except KeyError:
-                    pass
-                try:
-                    if variant['chrom'] in ('X', 'Y'):
-                        variant['pop_hemis'] = dict([(POPS[x], int(info_field['Hemi_%s' % x].split(',')[i])) for x in POPS])
-                        variant['hemi_count'] = sum(variant['pop_hemis'].values())
-                except KeyError:
-                    pass
-                try:
-                    variant['quality_metrics'] = dict([(x, info_field[x]) for x in METRICS if x in info_field])
-                except KeyError:
-                    pass
+                # Process ANN
+                db_annotations = []
+                for annotation in annotations:
+                    db_annotation = {}
+                    for key, value in annotation.items():
+                        try:
+                            dbkey = align.ANN[key]
+                            db_annotation[dbkey] = value
+                        except KeyError:
+                            log.print_warning("Alignment key %s not found in ANN alignment dictionary (align.py).")
+                            log.print_warning("This may be caused by new ANN types or may be wanted behavior")
+                            pass
+                    # Indexing information, technical.
+                    # MongoDB indexes cannot go above 1024 characters
+                    db_annotation["_pos"] = pos
+                    db_annotation["_alt"] = hashlib.md5("%s_%s_%s_%s" % (pos, ref, alt, db_annotation[align.ANN["Allele"]])).hexdigest()
+                    db_annotations.append(db_annotation)
+                variant['ANN'] = db_annotations
 
-                try:
-                    variant['genes'] = list({annotation['Gene'] for annotation in vep_annotations})
-                except KeyError:
-                    pass
-                try:
-                    variant['transcripts'] = list({annotation['Feature'] for annotation in vep_annotations})
-                except KeyError:
-                    pass
+                # Process LOF
+                variant['LOF'] = lof if 'LOF' in info_field else []
 
-                try:
-                    if 'DP_HIST' in info_field:
-                        hists_all = [info_field['DP_HIST'].split(',')[0], info_field['DP_HIST'].split(',')[i+1]]
-                        variant['genotype_depths'] = [zip(dp_mids, map(int, x.split('|'))) for x in hists_all]
-                except KeyError:
-                    pass
-                try:
-                    if 'GQ_HIST' in info_field:
-                        hists_all = [info_field['GQ_HIST'].split(',')[0], info_field['GQ_HIST'].split(',')[i+1]]
-                        variant['genotype_qualities'] = [zip(gq_mids, map(int, x.split('|'))) for x in hists_all]
-                except KeyError:
-                    pass
+                # Process NMD
+                variant['NMD'] = nmd if 'NMD' in info_field else []
+
+#                 variant['allele_count'] = int(info_field.get('AC_Adj', "0").split(',')[i])
+#                 if not variant['allele_count'] and variant['filter'] == 'PASS': variant['filter'] = 'AC_Adj0' # Temporary filter
+#                 try:
+#                     variant['allele_num'] = int(info_field['AN_Adj'])
+#                     if variant['allele_num'] > 0:
+#                         variant['allele_freq'] = variant['allele_count']/float(info_field['AN_Adj'])
+#                 except KeyError:
+#                     variant['allele_freq'] = None
+#                     pass
+#
+#                 try:
+#                     variant['pop_acs'] = dict([(POPS[x], int(info_field['AC_%s' % x].split(',')[i])) for x in POPS])
+#                 except KeyError:
+#                     pass
+#                 try:
+#                     variant['pop_ans'] = dict([(POPS[x], int(info_field['AN_%s' % x])) for x in POPS])
+#                 except KeyError:
+#                     pass
+#                 try:
+#                     variant['pop_homs'] = dict([(POPS[x], int(info_field['Hom_%s' % x].split(',')[i])) for x in POPS])
+# #                variant['ac_male'] = info_field['AC_MALE']
+# #                variant['ac_female'] = info_field['AC_FEMALE']
+# #                variant['an_male'] = info_field['AN_MALE']
+# #                variant['an_female'] = info_field['AN_FEMALE']
+#                     variant['hom_count'] = sum(variant['pop_homs'].values())
+#                 except KeyError:
+#                     pass
+#                 try:
+#                     if variant['chrom'] in ('X', 'Y'):
+#                         variant['pop_hemis'] = dict([(POPS[x], int(info_field['Hemi_%s' % x].split(',')[i])) for x in POPS])
+#                         variant['hemi_count'] = sum(variant['pop_hemis'].values())
+#                 except KeyError:
+#                     pass
+#                 try:
+#                     variant['quality_metrics'] = dict([(x, info_field[x]) for x in METRICS if x in info_field])
+#                 except KeyError:
+#                     pass
+#
+#                 try:
+#                     variant['genes'] = list({annotation['Gene'] for annotation in vep_annotations})
+#                 except KeyError:
+#                     pass
+#                 try:
+#                     variant['transcripts'] = list({annotation['Feature'] for annotation in vep_annotations})
+#                 except KeyError:
+#                     pass
+#
+#                 try:
+#                     if 'DP_HIST' in info_field:
+#                         hists_all = [info_field['DP_HIST'].split(',')[0], info_field['DP_HIST'].split(',')[i+1]]
+#                         variant['genotype_depths'] = [zip(dp_mids, map(int, x.split('|'))) for x in hists_all]
+#                 except KeyError:
+#                     pass
+#                 try:
+#                     if 'GQ_HIST' in info_field:
+#                         hists_all = [info_field['GQ_HIST'].split(',')[0], info_field['GQ_HIST'].split(',')[i+1]]
+#                         variant['genotype_qualities'] = [zip(gq_mids, map(int, x.split('|'))) for x in hists_all]
+#                 except KeyError:
+#                     pass
 
                 yield variant
         except Exception:
