@@ -1,0 +1,11 @@
+<span class='h4'>NMD (RAW)</span>
+{% for key in nmd.keys() %}
+  <div class="row">
+    <div class="col-md-6">
+      <dl class="dl-horizontal" style="margin-bottom: 0px;">
+        <dt>{{ key|replace('___', '/')|replace('_', ' ') }}</dt>
+        <dd>{{ nmd[key] }}</dd>
+      </dl>
+    </div>
+  </div>
+{% endfor %}

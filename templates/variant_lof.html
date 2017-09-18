@@ -1,0 +1,11 @@
+<span class='h4'>LOF (RAW)</span>
+{% for key in lof.keys() %}
+  <div class="row">
+    <div class="col-md-6">
+      <dl class="dl-horizontal" style="margin-bottom: 0px;">
+        <dt>{{ key|replace('___', '/')|replace('_', ' ') }}</dt>
+        <dd>{{ lof[key] }}</dd>
+      </dl>
+    </div>
+  </div>
+{% endfor %}

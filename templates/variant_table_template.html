@@ -111,8 +111,8 @@
                     <% if (flag == 'LoF flag') { span_tag = 'warning' } else { span_tag = 'danger' } %>
                     <a href="/exac/variant/<%= variant.chrom %>-<%= variant.pos %>-<%= variant.ref %>-<%= variant.alt %>" target="_blank"><span class="label label-<%= span_tag %> tooltip-table-header" data-tooltip="Variant annotation dubious: &#xa; see variant page for details"><%= flag %></span></a>
                 <% }); %></td>
-            <td> <%= variant.allele_count %> </td>
-            <td class='hidden-xs'> <%= variant.allele_num %> </td>
+            <td> <%= variant.INFO.AC %> </td>
+            <td class='hidden-xs'> <%= variant.INFO.AN %> </td>
             {% if chrom != 'Y' %}
                 <td class="hidden-xs"> <%= variant.hom_count %> </td>
             {% endif %}
@@ -120,34 +120,14 @@
                 <td class="hidden-xs"> <%= variant.hemi_count %> </td>
             {% endif %}
             <td>
-                <% if (variant.allele_freq) { %>
-                    <%= variant.allele_freq.toPrecision(4) %>
+                <% if (variant.INFO.AF) { %>
+                    <%= variant.INFO.AF.toPrecision(4) %>
                 <% } else { %>
-                    <%= variant.allele_freq %>
+                    <%= variant.INFO.AF %>
                 <% } %>
                 <div id="variant_af_box_<%= variant.variant_id %>" style="float: right;"></div>
             </td>
-            <td class="hidden"> <%= variant.pop_acs["African"] %></td>
-            <td class="hidden"> <%= variant.pop_ans["African"] %></td>
-            <td class="hidden"> <%= variant.pop_homs["African"] %></td>
-            <td class="hidden"> <%= variant.pop_acs["East Asian"] %></td>
-            <td class="hidden"> <%= variant.pop_ans["East Asian"] %></td>
-            <td class="hidden"> <%= variant.pop_homs["East Asian"] %></td>
-            <td class="hidden"> <%= variant.pop_acs["European (Non-Finnish)"] %></td>
-            <td class="hidden"> <%= variant.pop_ans["European (Non-Finnish)"] %></td>
-            <td class="hidden"> <%= variant.pop_homs["European (Non-Finnish)"] %></td>
-            <td class="hidden"> <%= variant.pop_acs["European (Finnish)"] %></td>
-            <td class="hidden"> <%= variant.pop_ans["European (Finnish)"] %></td>
-            <td class="hidden"> <%= variant.pop_homs["European (Finnish)"] %></td>
-            <td class="hidden"> <%= variant.pop_acs["Latino"] %></td>
-            <td class="hidden"> <%= variant.pop_ans["Latino"] %></td>
-            <td class="hidden"> <%= variant.pop_homs["Latino"] %></td>
-            <td class="hidden"> <%= variant.pop_acs["Other"] %></td>
-            <td class="hidden"> <%= variant.pop_ans["Other"] %></td>
-            <td class="hidden"> <%= variant.pop_homs["Other"] %></td>
-            <td class="hidden"> <%= variant.pop_acs["South Asian"] %></td>
-            <td class="hidden"> <%= variant.pop_ans["South Asian"] %></td>
-            <td class="hidden"> <%= variant.pop_homs["South Asian"] %></td>
+
         </tr>
     <% }); %>
     </tbody>

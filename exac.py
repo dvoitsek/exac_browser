@@ -136,11 +136,7 @@ def load_base_coverage(directory):
     db = get_db()
     # db.base_coverage.drop()
     # print("Dropped db.base_coverage")
-    if "base_coverage" not in db.collection_names():
-        db.create_collection('base_coverage')
-        # load coverage first; variant info will depend on coverage
-        db.base_coverage.ensure_index('xpos')
-        db.base_coverage.ensure_index("_source")
+
 
     procs = []
     coverage_files = [];
@@ -191,7 +187,7 @@ def load_variants_file(ref, alt, file):
                                         "$push":
                                             {
                                               "_sources": source,
-                                              'ANN': variant['ANN'],
+                                              'ANN': {"$each": variant['ANN']},
                                               'INFO': variant['INFO'],
                                               'LOF': variant['LOF'],
                                               'NMD': variant['NMD']
@@ -200,7 +196,7 @@ def load_variants_file(ref, alt, file):
                                 update_done = result.matched_count == 1 and result.modified_count == 1
                         else:
                             variant["_sources"] = [source]
-                            variant['ANN'] = [variant['ANN']]
+                            variant['ANN'] = variant['ANN']
                             variant['INFO'] = [variant['INFO']]
                             variant['LOF'] = [variant['LOF']]
                             variant['NMD'] = [variant['NMD']]
@@ -216,15 +212,6 @@ def load_variants_file(ref, alt, file):
             raise
 
     db = get_db()
-    if "variants" not in db.collection_names():
-        db.create_collection('variants')
-        db.variants.ensure_index('xpos')
-        db.variants.ensure_index('xstart')
-        db.variants.ensure_index('xstop')
-        db.variants.ensure_index('rsid')
-        db.variants.ensure_index('genes')
-        db.variants.ensure_index('transcripts')
-        db.variants.ensure_index('_sources')
 
     source = file_to_source(file)
     if db.sources.count({"_source": source}) != 0:
@@ -258,17 +245,31 @@ def drop_source(file):
     db = get_db()
     removed = 0
     source = file_to_source(file)
-    for dbname in db.collection_names():
-        log.print_info("Deleting %s from %s" % (source, dbname))
-        result = db[dbname].update_many({"_sources": {"$all": [source]}},
+    # Do not remove from annotations (not sourced)
+    # Do not remove from genes (too complicated)
+    if "base_coverage" in db.collection_names():
+        result = db.base_coverage.delete_many({"_source": source})
+        # removed += result.deleted_count
+        log.print_info("Removed %d elements from base_coverage" % result.deleted_count)
+    if "dbsnp" in db.collection_names():
+        result = db.dbsnp.delete_many({"_source": source})
+        log.print_info("Removed %d elements from dbsnp" % result.deleted_count)
+    if "exons" in db.collection_names():
+        result = db.exons.delete_many({"_source": source})
+        log.print_info("Removed %d elements from exons" % result.deleted_count)
+    if "transcripts" in db.collection_names():
+        result = db.transcripts.delete_many({"_source": source})
+        log.print_info("Removed %d elements from transcripts" % result.deleted_count)
+    if "variants" in db.collection_names():
+        result = db.variants.update_many({"_sources": {"$all": [source]}},
             {"$pullAll": {"_sources": [source]}},
             upsert=False)
+        log.print_info("%d variants had a source removed" % result.deleted_count)
         result = db[dbname].delete_many({"_sources": {"$size":0}})
-        removed += result.deleted_count
-        result = db[dbname].delete_many({"_source": source})
-        removed += result.deleted_count
-    log.print_info("Removed %s items from all collections" % removed)
-    db.sources.delete_many({"_source": source})
+        log.print_info("%d variants were left with no sources and were deleted" % result.deleted_count)
+    if "sources" in db.collection_names():
+        result = db.sources.delete_many({"_source": source})
+        log.print_info("Removed %d elements from sources" % result.deleted_count)
     log.print_info("Source %s dropped" % source)
 
 def load_constraint_information():
@@ -510,7 +511,7 @@ def load_dbsnp_file(dbsnp_file):
         log.print_warning("If you know the file has been updated please use drop_source and try this operation again.")
         log.print_warning("The other files will still be analysed.")
         return
-    add_source(source)
+    add_source(source, db, source=source)
 
     print "Loading dbsnp from %s" % dbsnp_file
     if os.path.isfile(dbsnp_file + ".tbi"):
@@ -670,6 +671,21 @@ def get_db():
     if not hasattr(g, 'db_conn'):
         g.db_conn = connect_db()
 
+    if "base_coverage" not in g.db_conn.collection_names():
+        g.db_conn.create_collection('base_coverage')
+        # load coverage first; variant info will depend on coverage
+        g.db_conn.base_coverage.ensure_index('xpos')
+        g.db_conn.base_coverage.ensure_index("_source")
+    if "variants" not in g.db_conn.collection_names():
+        g.db_conn.create_collection('variants')
+        g.db_conn.variants.ensure_index('xpos')
+        g.db_conn.variants.ensure_index('xstart')
+        g.db_conn.variants.ensure_index('xstop')
+        g.db_conn.variants.ensure_index('rsid')
+        g.db_conn.variants.ensure_index('genes')
+        g.db_conn.variants.ensure_index('transcripts')
+        g.db_conn.variants.ensure_index('_sources')
+        g.db_conn.variants.create_index('ANN._id')
     if "sources" not in g.db_conn.collection_names():
         g.db_conn.create_collection('sources')
         g.db_conn.sources.ensure_index("_source")
@@ -681,6 +697,12 @@ def get_db():
             ("_pos", pymongo.DESCENDING),
             ("_alt", pymongo.DESCENDING)
         ])
+        g.db_conn.annotations.create_index([
+            ("Gene_Name", pymongo.DESCENDING),
+            ("Gene_ID", pymongo.DESCENDING)
+        ])
+        g.db_conn.annotations.create_index("Gene_ID")
+        g.db_conn.annotations.create_index("Gene_Name")
     return g.db_conn
 
 def add_source(file, db, source=None):
@@ -715,7 +737,7 @@ def objects_to_ids(objects, collection):
                     update_done = True
         else:
             _id = res['_id']
-        ids.append(_id)
+        ids.append(str(_id))
     return ids
 
 # @app.teardown_appcontext
@@ -723,28 +745,32 @@ def objects_to_ids(objects, collection):
 #     """Closes the database again at the end of the request."""
 #     if hasattr(g, 'db_conn'):
 #         g.db_conn.close()
+PREFIX = '/exac'
 
-
-@app.route('/')
+@app.route(PREFIX + '/')
 def homepage():
     return render_template('homepage.html')
 
 
-@app.route('/autocomplete/<query>')
+@app.route(PREFIX + '/autocomplete/<query>')
 def awesome_autocomplete(query):
+    log.print_info('Entering autocomplte')
     if not hasattr(g, 'autocomplete_strings'):
+        log.print_info('No strings attribute, generating')
         g.autocomplete_strings = [s.strip() for s in open(os.path.join(os.path.dirname(__file__), 'autocomplete_strings.txt'))]
+    log.print_info('Looking up autocomplete proposals')
     suggestions = lookups.get_awesomebar_suggestions(g, query)
+    log.print_info('Returning suggestions')
     return Response(json.dumps([{'value': s} for s in suggestions]),  mimetype='application/json')
 
 
-@app.route('/awesome')
+@app.route(PREFIX + '/awesome')
 def awesome():
     db = get_db()
     query = request.args.get('query')
     datatype, identifier = lookups.get_awesomebar_result(db, query)
 
-    print "Searched for %s: %s" % (datatype, identifier)
+    log.print_info("Searched for %s: %s" % (datatype, identifier))
     if datatype == 'gene':
         return redirect('gene/{}'.format(identifier))
     elif datatype == 'transcript':
@@ -763,7 +789,7 @@ def awesome():
         raise Exception
 
 
-@app.route('/variant/<variant_str>')
+@app.route(PREFIX + '/variant/<variant_str>')
 def variant_page(variant_str):
     db = get_db()
     try:
@@ -772,8 +798,9 @@ def variant_page(variant_str):
         # pos, ref, alt = get_minimal_representation(pos, ref, alt)
         xpos = get_xpos(chrom, pos)
         variant = lookups.get_variant(db, xpos, ref, alt)
-
+        # log.print_info("Found variant %s" % variant)
         if variant is None:
+            log.print_info("Variant %s not found in database" % variant_str)
             variant = {
                 'chrom': chrom,
                 'pos': pos,
@@ -781,17 +808,26 @@ def variant_page(variant_str):
                 'ref': ref,
                 'alt': alt
             }
+        else:
+            # Currently takes the last indexed source (most recent). Let the user choose somehow.
+            pick_variant_source(variant, -1)
+            # log.print_info("Sourced variant %s" % variant)
+        if 'INFO' in variant:
+            variant['allele_num'] = variant['INFO']['AN']
+            variant['allele_freq'] = variant['INFO']['AF']
+            variant['allele_count'] = variant['INFO']['AC']
         consequences = OrderedDict()
-        if 'vep_annotations' in variant:
+        if 'ANN' in variant:
             add_consequence_to_variant(variant)
-            variant['vep_annotations'] = remove_extraneous_vep_annotations(variant['vep_annotations'])
-            variant['vep_annotations'] = order_vep_by_csq(variant['vep_annotations'])  # Adds major_consequence
-            for annotation in variant['vep_annotations']:
+            # variant['ANN'] = remove_extraneous_vep_annotations(variant['ANN'])
+            variant['ANN'] = order_snpeff_by_csq(variant['ANN'])  # Adds major_consequence
+            for annotation in variant['ANN']:
                 annotation['HGVS'] = get_proper_hgvs(annotation)
-                consequences.setdefault(annotation['major_consequence'], {}).setdefault(annotation['Gene'], []).append(annotation)
+                consequences.setdefault(annotation['major_consequence'], {}).setdefault(annotation['Gene_Name'], []).append(annotation)
         base_coverage = lookups.get_coverage_for_bases(db, xpos, xpos + len(ref) - 1)
         any_covered = any([x['has_coverage'] for x in base_coverage])
         metrics = lookups.get_metrics(db, variant)
+        strip_internal_fields(variant)
 
         # check the appropriate sqlite db to get the *expected* number of
         # available bams and *actual* number of available bams for this variant
@@ -860,7 +896,7 @@ def variant_page(variant_str):
         abort(404)
 
 
-@app.route('/gene/<gene_id>')
+@app.route(PREFIX + '/gene/<gene_id>')
 def gene_page(gene_id):
     if gene_id in GENES_TO_CACHE:
         return open(os.path.join(GENE_CACHE_DIR, '{}.html'.format(gene_id))).read()
@@ -873,7 +909,9 @@ def get_gene_page_content(gene_id):
     try:
         gene = lookups.get_gene(db, gene_id)
         if gene is None:
-            abort(404)
+            gene = lookups.get_gene_by_name(db, gene_id)
+            if gene is None:
+                abort(404)
         cache_key = 't-gene-{}'.format(gene_id)
         t = cache.get(cache_key)
         if t is None:
@@ -883,7 +921,8 @@ def get_gene_page_content(gene_id):
             # Get some canonical transcript and corresponding info
             transcript_id = gene['canonical_transcript']
             transcript = lookups.get_transcript(db, transcript_id)
-            variants_in_transcript = lookups.get_variants_in_transcript(db, transcript_id)
+            # variants_in_transcript = lookups.get_variants_in_transcript(db, transcript_id)
+            variants_in_transcript = copy.deepcopy(variants_in_gene)
             cnvs_in_transcript = lookups.get_exons_cnvs(db, transcript_id)
             cnvs_per_gene = lookups.get_cnvs(db, gene_id)
             coverage_stats = lookups.get_coverage_for_transcript(db, transcript['xstart'] - EXON_PADDING, transcript['xstop'] + EXON_PADDING)
@@ -910,16 +949,18 @@ def get_gene_page_content(gene_id):
         abort(404)
 
 
-@app.route('/transcript/<transcript_id>')
+@app.route(PREFIX + '/transcript/<transcript_id>')
 def transcript_page(transcript_id):
     db = get_db()
     try:
         transcript = lookups.get_transcript(db, transcript_id)
+        if transcript is None:
+            log.print_info("Transcript %s not found" % transcript_id)
+            abort(404)
 
         cache_key = 't-transcript-{}'.format(transcript_id)
         t = cache.get(cache_key)
         if t is None:
-
             gene = lookups.get_gene(db, transcript['gene_id'])
             gene['transcripts'] = lookups.get_transcripts_in_gene(db, transcript['gene_id'])
             variants_in_transcript = lookups.get_variants_in_transcript(db, transcript_id)
@@ -952,7 +993,7 @@ def transcript_page(transcript_id):
         abort(404)
 
 
-@app.route('/region/<region_id>')
+@app.route(PREFIX + '/region/<region_id>')
 def region_page(region_id):
     db = get_db()
     try:
@@ -1001,7 +1042,7 @@ def region_page(region_id):
         abort(404)
 
 
-@app.route('/dbsnp/<rsid>')
+@app.route(PREFIX + '/dbsnp/<rsid>')
 def dbsnp_page(rsid):
     db = get_db()
     try:
@@ -1025,7 +1066,7 @@ def dbsnp_page(rsid):
         abort(404)
 
 
-@app.route('/not_found/<query>')
+@app.route(PREFIX + '/not_found/<query>')
 @app.errorhandler(404)
 def not_found_page(query):
     return render_template(
@@ -1034,7 +1075,7 @@ def not_found_page(query):
     ), 404
 
 
-@app.route('/error/<query>')
+@app.route(PREFIX + '/error/<query>')
 @app.errorhandler(404)
 def error_page(query):
     return render_template(
@@ -1043,37 +1084,37 @@ def error_page(query):
     ), 404
 
 
-@app.route('/downloads')
+@app.route(PREFIX + '/downloads')
 def downloads_page():
     return render_template('downloads.html')
 
 
-@app.route('/about')
+@app.route(PREFIX + '/about')
 def about_page():
     return render_template('about.html')
 
 
-@app.route('/participants')
+@app.route(PREFIX + '/participants')
 def participants_page():
     return render_template('about.html')
 
 
-@app.route('/terms')
+@app.route(PREFIX + '/terms')
 def terms_page():
     return render_template('terms.html')
 
 
-@app.route('/contact')
+@app.route(PREFIX + '/contact')
 def contact_page():
     return render_template('contact.html')
 
 
-@app.route('/faq')
+@app.route(PREFIX + '/faq')
 def faq_page():
     return render_template('faq.html')
 
 
-@app.route('/text')
+@app.route(PREFIX + '/text')
 def text_page():
     db = get_db()
     query = request.args.get('text')
@@ -1094,7 +1135,7 @@ http://omim.org/entry/%(omim_accession)s''' % gene
         return "Search types other than gene transcript not yet supported"
 
 
-@app.route('/read_viz/<path:path>')
+@app.route(PREFIX + '/read_viz/<path:path>')
 def read_viz_files(path):
     full_path = os.path.abspath(os.path.join(app.config["READ_VIZ_DIR"], path))
 
@@ -1128,8 +1169,7 @@ def read_viz_files(path):
     logging.info("readviz: range request: %s-%s %s" % (m.group(1), m.group(2), full_path))
     return rv
 
-app.wsgi_app = DispatcherMiddleware(app, {'/exac': app.wsgi_app})
-
 if __name__ == "__main__":
+    # app.wsgi_app = DispatcherMiddleware(app, {'/exac': app.wsgi_app})
     runner = Runner(app)  # adds Flask command line options for setting host, port, etc.
     runner.run()

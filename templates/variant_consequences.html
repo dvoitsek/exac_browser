@@ -1,11 +1,11 @@
 <span class="h4">{{ consequence|replace('_variant', '')|replace('_', ' ')|replace('utr', 'UTR')|replace('3 prime', "3'")|replace('5 prime', "5'")|replace('nc ', "non-coding ") }}</span>
 <span style='float: right;'>
 {% if consequence == 'frameshift_variant' or consequence == 'stop_gained_variant' or consequence == 'splice_acceptor_variant' or consequence == 'splice_donor_variant' %}
-    {% if 'LC LoF' in variant.flags %}
+    <!-- {% if 'LC LoF' in variant.flags %}
         <span class="label label-danger" data-tooltip="Expand dropdown for details">Low-confidence</span>
     {% elif 'LoF flag' in variant.flags %}
         <span class="label label-warning" data-tooltip="Expand dropdown for details">Flagged</span>
-    {% endif %}
+    {% endif %} -->
 {% endif %}
 </span>
 <ul>
@@ -27,8 +27,8 @@
                     <ul class="dropdown-menu" role="menu" aria-labelledby="transcript_dropdown">
                         {% for annotation in consequences[consequence][gene] %}
                             <li role="presentation">
-                                <a role="menuitem" tabindex="-1" href="/exac/transcript/{{ annotation.Feature }}">
-                                    {{ annotation.Feature }}
+                                <a role="menuitem" tabindex="-1" href="/exac/transcript/{{ annotation.Feature_ID }}">
+                                    {{ annotation.Feature_ID }}
                                     {% if annotation.CANONICAL == 'YES' %}
                                         *
                                     {% endif %}
@@ -40,8 +40,8 @@
                 </span>
             {% else %}
                 {% set annotation = consequences[consequence][gene][0] %}
-                 - <a href="/exac/transcript/{{ annotation.Feature }}">
-                    {{ annotation.Feature }}
+                 - <a href="/exac/transcript/{{ annotation.Feature_ID }}">
+                    {{ annotation.Feature_ID }}
                     {% if annotation.CANONICAL == 'YES' %}
                         *
                     {% endif %}

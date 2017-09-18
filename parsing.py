@@ -98,6 +98,24 @@ def get_variants_from_sites_vcf(sites_vcf, app):
             lof = dict(zip(lof_field_names, info_field['LOF'].strip('( )'))) if 'LOF' in info_field else None
             nmd = dict(zip(nmd_field_names, info_field['NMD'].strip('( )'))) if 'NMD' in info_field else None
 
+            if lof is not None:
+                for k,v in lof.items():
+                    if align.TYPE_CONVERT[k] is not None:
+                        try:
+                            lof[k] = align.TYPE_CONVERT[k](v)
+                        except ValueError:
+                            log.print_error("Wrong conversion type for LOF %s:%s" % (k, v))
+                            raise
+
+            if nmd is not None:
+                for k,v in nmd.items():
+                    if align.TYPE_CONVERT[k] is not None:
+                        try:
+                            nmd[k] = align.TYPE_CONVERT[k](v)
+                        except ValueError:
+                            log.print_error("Wrong conversion type for NMD %s:%s" % (k, v))
+                            raise
+
             alt_alleles = fields[4].split(',')
 
             # different variant for each alt allele
@@ -136,11 +154,17 @@ def get_variants_from_sites_vcf(sites_vcf, app):
                         continue
                     try:
                         dbkey = align.INFO[key]
-                        db_info[dbkey] = value if "," not in value else value.split(',')[i]
+                        if align.TYPE_CONVERT[key] is not None:
+                            db_info[dbkey] = align.TYPE_CONVERT[key](value) if "," not in value else align.TYPE_CONVERT[key](value.split(',')[i])
+                        else:
+                            db_info[dbkey] = value if "," not in value else value.split(',')[i]
                     except KeyError:
                         log.print_warning("Alignment key %s not found in INFO alignment dictionary (align.py).")
                         log.print_warning("This may be caused by new INFO types or may be wanted behavior")
                         pass
+                    except ValueError:
+                        log.print_error("Wrong type conversion for INFO %s:%s" % (key, value))
+                        raise
                 variant['INFO'] = db_info
 
                 # Process ANN
@@ -150,11 +174,14 @@ def get_variants_from_sites_vcf(sites_vcf, app):
                     for key, value in annotation.items():
                         try:
                             dbkey = align.ANN[key]
-                            db_annotation[dbkey] = value
+                            db_annotation[dbkey] = value if align.TYPE_CONVERT[key] == None else align.TYPE_CONVERT[key](value)
                         except KeyError:
                             log.print_warning("Alignment key %s not found in ANN alignment dictionary (align.py).")
                             log.print_warning("This may be caused by new ANN types or may be wanted behavior")
                             pass
+                        except ValueError:
+                            log.print_error("Wrong type conversion for ANN %s:%s" % (key, value))
+                            raise
                     # Indexing information, technical.
                     # MongoDB indexes cannot go above 1024 characters
                     db_annotation["_pos"] = pos

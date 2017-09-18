@@ -1,4 +1,7 @@
 from operator import itemgetter
+import log
+import align
+
 AF_BUCKETS = [0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1]
 METRICS = [
     'BaseQRankSum',
@@ -68,13 +71,17 @@ def add_consequence_to_variants(variant_list):
 
 
 def add_consequence_to_variant(variant):
-    worst_csq = worst_csq_with_vep(variant['vep_annotations'])
+    '''
+    Variant must have been sourced an annotations expanded.
+    '''
+    # worst_csq = worst_csq_with_vep(variant['vep_annotations'])
+    worst_csq = worst_csq_with_snpsift(variant['ANN'])
     if worst_csq is None: return
     variant['major_consequence'] = worst_csq['major_consequence']
-    variant['HGVSp'] = get_protein_hgvs(worst_csq)
-    variant['HGVSc'] = get_transcript_hgvs(worst_csq)
+    variant['HGVSp'] = get_protein_hgvs_snpeff(worst_csq)
+    variant['HGVSc'] = get_transcript_hgvs_snpeff(worst_csq)
     variant['HGVS'] = get_proper_hgvs(worst_csq)
-    variant['CANONICAL'] = worst_csq['CANONICAL']
+    # variant['CANONICAL'] = worst_csq['CANONICAL']
     variant['indel'] = len(variant['ref']) != len(variant['alt'])
     if csq_order_dict[variant['major_consequence']] <= csq_order_dict["frameshift_variant"]:
         variant['category'] = 'lof_variant'
@@ -89,7 +96,7 @@ def add_consequence_to_variant(variant):
         variant['category'] = 'synonymous_variant'
     else:
         variant['category'] = 'other_variant'
-    variant['flags'] = get_flags_from_variant(variant)
+    # variant['flags'] = get_flags_from_variant_snpeff(variant)
 
 
 def get_flags_from_variant(variant):
@@ -102,6 +109,18 @@ def get_flags_from_variant(variant):
         flags.append('LC LoF')
     if all([x['LoF_flags'] != '' for x in lof_annotations]):
         flags.append('LoF flag')
+    return flags
+
+def get_flags_from_variant_snpeff(variant):
+    flags = []
+    # if 'mnps' in variant:
+    #     flags.append('MNP')
+    # lof_annotations = [x for x in variant['ANN'] if len(variant['LOF']) > 0]
+    # if not len(lof_annotations): return flags
+    # if all([x['LOF'] != 'HC' for x in lof_annotations]):
+    #     flags.append('LC LoF')
+    # if all([x['LoF_flags'] != '' for x in lof_annotations]):
+    #     flags.append('LoF flag')
     return flags
 
 
@@ -118,13 +137,16 @@ protein_letters_1to3 = {
 def get_proper_hgvs(csq):
     # Needs major_consequence
     if csq['major_consequence'] in ('splice_donor_variant', 'splice_acceptor_variant', 'splice_region_variant'):
-        return get_transcript_hgvs(csq)
+        return get_transcript_hgvs_snpeff(csq)
     else:
-        return get_protein_hgvs(csq)
+        return get_protein_hgvs_snpeff(csq)
 
 
 def get_transcript_hgvs(csq):
     return csq['HGVSc'].split(':')[-1]
+
+def get_transcript_hgvs_snpeff(csq):
+    return csq[align.ANN['HGVS.c']].split(':')[-1]
 
 
 def get_protein_hgvs(annotation):
@@ -138,6 +160,19 @@ def get_protein_hgvs(annotation):
         except Exception, e:
             print 'Could not create HGVS for: %s' % annotation
     return annotation['HGVSp'].split(':')[-1]
+
+def get_protein_hgvs_snpeff(annotation):
+    """
+    Takes consequence dictionary, returns proper variant formatting for synonymous variants
+    """
+    if '%3D' in annotation[align.ANN['HGVS.p']]: # "%3D" is "="
+        try:
+            # amino_acids = ''.join([protein_letters_1to3[x] for x in annotation['Amino_acids']])
+            # return "p." + amino_acids + annotation['Protein_position'] + amino_acids
+            return annotation[align.ANN['HGVS.p']]
+        except Exception, e:
+            print 'Could not create HGVS for: %s' % annotation
+    return annotation[align.ANN['HGVS.p']].split(':')[-1]
 
 # Note that this is the current as of v81 with some included for backwards compatibility (VEP <= 75)
 csq_order = ["transcript_ablation",
@@ -178,6 +213,8 @@ csq_order = ["transcript_ablation",
 "regulatory_region_variant",
 "feature_truncation",
 "intergenic_variant",
+"intergenic_region", # SnpEff? Right place for it?
+"sequence_feature",
 ""]
 assert len(csq_order) == len(set(csq_order)) # No dupes!
 
@@ -225,6 +262,14 @@ def order_vep_by_csq(annotation_list):
         ann['major_consequence'] = worst_csq_from_csq(ann['Consequence'])
     return sorted(annotation_list, key=(lambda ann:csq_order_dict[ann['major_consequence']]))
 
+def order_snpeff_by_csq(annotation_list):
+    """
+    Adds "major_consequence" to each annotation.
+    Returns them ordered from most deleterious to least.
+    """
+    for ann in annotation_list:
+        ann['major_consequence'] = worst_csq_from_csq(ann['Annotation'])
+    return sorted(annotation_list, key=(lambda ann:csq_order_dict[ann['major_consequence']]))
 
 def worst_csq_with_vep(annotation_list):
     """
@@ -238,12 +283,26 @@ def worst_csq_with_vep(annotation_list):
     worst['major_consequence'] = worst_csq_from_csq(worst['Consequence'])
     return worst
 
+def worst_csq_with_snpsift(annotation_list):
+    if len(annotation_list) == 0:
+        return None
+    worst = max(annotation_list, key=annotation_severity_snpsift)
+    worst['major_consequence'] = worst_csq_from_csq(worst['Annotation'])
+    return worst
 
 def annotation_severity(annotation):
     "Bigger is more important."
     rv = -csq_order_dict[worst_csq_from_csq(annotation['Consequence'])]
     if annotation['CANONICAL'] == 'YES':
         rv += 0.1
+    return rv
+
+def annotation_severity_snpsift(annotation):
+    "Bigger is more important."
+    # log.print_info("Annotation: %s" % annotation)
+    rv = -csq_order_dict[worst_csq_from_csq(annotation['Annotation'])]
+    # if annotation['CANONICAL'] == 'YES':
+    #     rv += 0.1
     return rv
 
 CHROMOSOMES = ['chr%s' % x for x in range(1, 23)]
@@ -300,3 +359,33 @@ def get_minimal_representation(pos, ref, alt):
             ref = ref[1:]
             pos += 1
         return pos, ref, alt
+
+def pick_variant_source(variant, source):
+    """
+    Get the sourced data indicated by index 'source' in input variant.
+    In practice, move all sourced data one level up in variant and delete all other sourced data within.
+    """
+    variant['_source'] = variant['_sources'][source]
+    sourceUri = variant['_source']
+    variant['INFO'] = variant['INFO'][source]
+    variant['LOF'] = variant['LOF'][source]
+    variant['NMD'] = variant['NMD'][source]
+    sourced_annotations = []
+    # log.print_info("Processing annotations %s" % variant['ANN'])
+    for ann in variant['ANN']:
+        if ann['_source'] == sourceUri:
+            sourced_annotations.append(ann)
+    variant['ANN'] = sourced_annotations
+    # variant.pop('_id', None)
+    variant.pop('_sources', None)
+    return variant
+
+def strip_internal_fields(variant):
+    for k,v in variant.items():
+        if k.startswith('_'):
+            variant.pop(k, None)
+    for annotation in variant['ANN']:
+        for k,v in annotation.items():
+            if k.startswith('_'):
+                annotation.pop(k, None)
+    return variant

@@ -197,7 +197,7 @@
                         <dt>Allele Frequency</dt>
                         <dd>{% if variant.allele_freq %}{{ '%0.4g' % variant.allele_freq }}{% else %}NA (Allele Number = 0){% endif %}</dd>
                         <dt>Allele Count</dt>
-                        <dd>{{ variant.allele_count }} / {{ variant.allele_num }}</dd>
+                        <dd>{{ variant.INFO.AC }} / {{ variant.INFO.AN }}</dd>
                         <dt>UCSC</dt>
                         <dd>
                             <a href="http://genome.ucsc.edu/cgi-bin/hgTracks?db=hg19&highlight=hg19.chr{{ variant.chrom }}%3A{{ variant.pos }}-{{ variant.pos + variant.ref|length - 1 }}&position=chr{{ variant.chrom }}%3A{{ variant.pos - 25 }}-{{ variant.pos + variant.ref|length - 1 + 25 }}" target="_blank">
@@ -278,8 +278,8 @@
                                                 <small><span class="label label-info">Note:</span> These are site-level quality metrics: they may be unpredictable for multi-allelic sites.</small>
                                                 <select id="quality_metric_select" class="form-control">
                                                     <option><small>Site Quality: {{ variant.site_quality }}</small></option>
-                                                    {% for metric in variant.quality_metrics %}
-                                                        <option><small>{{ metric }}: {{ variant.quality_metrics[metric] }}</small></option>
+                                                    {% for metric in variant.INFO %}
+                                                        <option><small>{{ metric }}: {{ variant.INFO[metric] }}</small></option>
                                                     {% endfor %}
                                                 </select>
                                                 <br/>
@@ -301,7 +301,7 @@
                 <div id="annotation_container">
                 {% if variant.variant_id %}
                     <div class="section_header">Annotations</div>
-                    {% if variant.vep_annotations %}
+                    {% if variant.ANN %}
                         <p>This variant falls on {{ variant.transcripts|length }} transcripts in {{ variant.genes|length }} genes:</p>
                         <div class="panel-group" id="annotation_accordion" style="margin-bottom: 0px;">
                             <div class="row">
@@ -322,6 +322,31 @@
                             </div>
                         </div>
                         <small><span class="label label-info">Note:</span> This list may not include additional transcripts in the same gene that the variant does not overlap.</small>
+                        <div class="row" style="margin-bottom: 10px">
+                          <div class="section_header">Raw Annotations</div>
+                          {% for annotation in variant.ANN %}
+                            <div style="margin-bottom: 20px">
+                              {% include 'variant_annotation.html' %}
+                            </div>
+                          {% endfor %}
+                        </div>
+                        <div class="row">
+                          <div class="section_header">Raw LOF</div>
+                          {% for lof in variant.LOF %}
+                            <div style="margin-bottom: 20px">
+                              {% include 'variant_lof.html' %}
+                            </div>
+                          {% endfor %}
+                        </div>
+                        <div class="row">
+                          <div class="section_header">Raw NMD</div>
+                          {% for nmd in variant.NMD %}
+                            <div style="margin-bottom: 20px">
+                              {% include 'variant_nmd.html' %}
+                            </div>
+                          {% endfor %}
+                        </div>
+                      </div>
                     {% else %}
                         No annotations were found for this variant.
                     {% endif %}

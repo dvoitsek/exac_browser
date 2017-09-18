@@ -1,5 +1,7 @@
 import re
 from utils import *
+import log
+import bson
 
 SEARCH_LIMIT = 10000
 
@@ -26,7 +28,13 @@ def get_transcript(db, transcript_id):
 
 
 def get_raw_variant(db, xpos, ref, alt, get_id=False):
-    return db.variants.find_one({'xpos': xpos, 'ref': ref, 'alt': alt}, projection={'_id': get_id})
+    # log.print_info("Search with xpos=%d ref=%s alt=%s" % (xpos, ref, alt))
+    variant = db.variants.find_one({'xpos': xpos, 'ref': ref, 'alt': alt}, projection={'_id': get_id})
+    if variant is not None:
+        expand_variant_annotations(variant, db)
+    else:
+        log.print_warning("Found no variant for xpos=%d ref=%s alt=%s" % (xpos, ref, alt))
+    return variant
 
 
 def get_variant(db, xpos, ref, alt):
@@ -48,7 +56,9 @@ def get_variants_by_rsid(db, rsid):
     except Exception, e:
         return None
     variants = list(db.variants.find({'rsid': rsid}, projection={'_id': False}))
+    variants = [expand_variant_annotations(variant, db) for variant in variants]
     add_consequence_to_variants(variants)
+    variants = [pick_variant_source(variant, -1) for variant in variants]
     return variants
 
 
@@ -63,6 +73,8 @@ def get_variants_from_dbsnp(db, rsid):
     if position:
         variants = list(db.variants.find({'xpos': {'$lte': position['xpos'], '$gte': position['xpos']}}, projection={'_id': False}))
         if variants:
+            variants = [expand_variant_annotations(variant, db) for variant in variants]
+            variants = [pick_variant_source(variant, -1) for variant in variants]
             add_consequence_to_variants(variants)
             return variants
     return []
@@ -247,9 +259,12 @@ def get_variants_in_region(db, chrom, start, stop):
     variants = list(db.variants.find({
         'xpos': {'$lte': xstop, '$gte': xstart}
     }, projection={'_id': False}, limit=SEARCH_LIMIT))
+    variants = [expand_variant_annotations(variant, db) for variant in variants]
+    variants = [pick_variant_source(variant, -1) for variant in variants]
     add_consequence_to_variants(variants)
     for variant in variants:
-        remove_extraneous_information(variant)
+        # remove_extraneous_information(variant)
+        strip_internal_fields(variant)
     return list(variants)
 
 
@@ -292,11 +307,19 @@ def get_variants_in_gene(db, gene_id):
     """
     """
     variants = []
-    for variant in db.variants.find({'genes': gene_id}, projection={'_id': False}):
-        variant['vep_annotations'] = [x for x in variant['vep_annotations'] if x['Gene'] == gene_id]
+    annotation_ids = []
+    for annotation in db.annotations.find({'$or' : [{'Gene_Name': gene_id}, {'Gene_ID': gene_id}]}):
+        annotation_ids.append(str(annotation['_id']))
+    # log.print_info("Found %d annotations" % len(annotation_ids))
+    for variant in db.variants.find({'ANN._id': {'$in' : annotation_ids}}, projection={'_id': False}):
+        # variant['vep_annotations'] = [x for x in variant['vep_annotations'] if x['Gene'] == gene_id]
+        pick_variant_source(variant, -1)
+        expand_variant_annotations(variant, db)
         add_consequence_to_variant(variant)
-        remove_extraneous_information(variant)
+        strip_internal_fields(variant)
+        # remove_extraneous_information(variant)
         variants.append(variant)
+    # log.print_info("Found %d variants matching gene id or name" % len(variants))
     return variants
 
 
@@ -310,10 +333,24 @@ def get_variants_in_transcript(db, transcript_id):
     """
     """
     variants = []
-    for variant in db.variants.find({'transcripts': transcript_id}, projection={'_id': False}):
-        variant['vep_annotations'] = [x for x in variant['vep_annotations'] if x['Feature'] == transcript_id]
+    annotation_ids = []
+    # Get transcript's gene ids
+    gene_ids = list(db.transcripts.find({'transcript_id': transcript_id}, projection={'_id': False, 'gene_id': True}))
+    gene_ids = [x['gene_id'] for x in gene_ids]
+    log.print_info("Found genes in transcript %s" % gene_ids)
+
+    # Find annotations mentioning gene ids
+    for annotation in db.annotations.find({'$or' : [{'Gene_Name': {'$in': gene_ids}}, {'Gene_ID': {'$in': gene_ids}}]}):
+        annotation_ids.append(str(annotation['_id']))
+
+    # Grab corresponding variants
+    for variant in db.variants.find({'ANN._id': {'$in' : annotation_ids}}, projection={'_id': False}):
+        # variant['vep_annotations'] = [x for x in variant['vep_annotations'] if x['Feature'] == transcript_id]
+        pick_variant_source(variant, -1)
+        expand_variant_annotations(variant, db)
         add_consequence_to_variant(variant)
-        remove_extraneous_information(variant)
+        strip_internal_fields(variant)
+        # remove_extraneous_information(variant)
         variants.append(variant)
     return variants
 
@@ -325,3 +362,19 @@ def get_exons_in_transcript(db, transcript_id):
     #      if x['feature_type'] != 'exon'],
     #     key=lambda k: k['start'])
     return sorted(list(db.exons.find({'transcript_id': transcript_id, 'feature_type': { "$in": ['CDS', 'UTR', 'exon'] }}, projection={'_id': False})), key=lambda k: k['start'])
+
+def expand_variant_annotations(variant, db):
+    '''
+    Input variant MUST be unsourced
+    '''
+    annotations = []
+    for ann in variant['ANN']:
+        # log.print_info("Expanding annotation %s" % ann)
+        src_ann = db.annotations.find_one(bson.objectid.ObjectId(oid=ann['_id']), projection={'_id': False})
+        src_ann['_source'] = ann['_source']
+        if src_ann is None:
+            log.print_error("Annotation %s referenced in variant %s not found in annotations collection." % (ann['_id'], variant['variant_id']))
+        else:
+            annotations.append(src_ann)
+    variant['ANN'] = annotations
+    return variant

@@ -612,7 +612,7 @@ function update_variants() {
         .attr('id')
         .replace('indel_selection_', '')
         .replace('_button', '');
-    $('[major_consequence]').hide()
+    // $('[major_consequence]').hide()
     $('[major_consequence]').map(function(row) {
         if (!filterState && $(this).attr('filter_status') !== 'PASS') {
             return
