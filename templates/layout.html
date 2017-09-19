@@ -41,7 +41,7 @@
             var bestPictures = new Bloodhound({
               datumTokenizer: Bloodhound.tokenizers.obj.whitespace('value'),
               queryTokenizer: Bloodhound.tokenizers.whitespace,
-              remote: 'autocomplete/%QUERY'
+              remote: '/exac/autocomplete/%QUERY'
             });
 
             bestPictures.initialize();

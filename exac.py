@@ -754,13 +754,13 @@ def homepage():
 
 @app.route(PREFIX + '/autocomplete/<query>')
 def awesome_autocomplete(query):
-    log.print_info('Entering autocomplte')
+    # log.print_info('Entering autocomplte')
     if not hasattr(g, 'autocomplete_strings'):
-        log.print_info('No strings attribute, generating')
+        # log.print_info('No strings attribute, generating')
         g.autocomplete_strings = [s.strip() for s in open(os.path.join(os.path.dirname(__file__), 'autocomplete_strings.txt'))]
-    log.print_info('Looking up autocomplete proposals')
+    # log.print_info('Looking up autocomplete proposals')
     suggestions = lookups.get_awesomebar_suggestions(g, query)
-    log.print_info('Returning suggestions')
+    # log.print_info('Returning suggestions')
     return Response(json.dumps([{'value': s} for s in suggestions]),  mimetype='application/json')
 
 
@@ -911,7 +911,19 @@ def get_gene_page_content(gene_id):
         if gene is None:
             gene = lookups.get_gene_by_name(db, gene_id)
             if gene is None:
-                abort(404)
+                return render_template(
+                    'gene.html',
+                    gene=None,
+                    transcript=None,
+                    variants_in_gene=None,
+                    variants_in_transcript=None,
+                    transcripts_in_gene=None,
+                    coverage_stats=None,
+                    cnvs = None,
+                    cnvgenes = None,
+                    constraint=None
+                )
+                # abort(404)
         cache_key = 't-gene-{}'.format(gene_id)
         t = cache.get(cache_key)
         if t is None:
